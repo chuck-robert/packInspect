@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 包管理器探测结果
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagerInfo {
     /// 稳定标识符，如 "npm" / "pip"
@@ -34,7 +34,7 @@ pub struct ManagerInfo {
 }
 
 /// 镜像源 / 配置文件现状
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryConfig {
     pub manager_id: String,
@@ -46,7 +46,7 @@ pub struct RegistryConfig {
     pub writable: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryEntry {
     pub key: String,
@@ -58,7 +58,7 @@ pub struct RegistryEntry {
 }
 
 /// 一个已安装的包
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageRecord {
     pub name: String,
@@ -81,7 +81,7 @@ pub struct PackageRecord {
 }
 
 /// 缓存目录统计
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheStats {
     pub manager_id: String,
@@ -97,7 +97,7 @@ pub struct CacheStats {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CacheChild {
     pub name: String,
@@ -148,8 +148,11 @@ pub struct CleanResult {
     pub message: Option<String>,
 }
 
-/// 一次完整扫描的报告
-#[derive(Debug, Clone, Serialize)]
+/// 一次完整扫描的报告。
+///
+/// `Deserialize` 是必需的：`export_report` 命令需要把前端持有的报告作为**入参**传回后端，
+/// Tauri 的 `CommandArg` 要求入参可反序列化。
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanReport {
     /// 报告生成时间（RFC3339）

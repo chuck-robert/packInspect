@@ -89,7 +89,7 @@ pub fn children_stat(root: &Path, max_entries: u64) -> Vec<(String, PathBuf, Dir
 
 /// 读取文本文件。超过 `max_bytes` 时截断，避免读取巨型文件卡住内存。
 pub fn read_text(path: &Path, max_bytes: u64) -> AppResult<String> {
-    let mut file = std::fs::File::open(path)
+    let file = std::fs::File::open(path)
         .map_err(|e| AppError::io(format!("打开 {} 失败: {e}", path.display())))?;
     let mut buf = Vec::new();
     file.take(max_bytes).read_to_end(&mut buf)?;

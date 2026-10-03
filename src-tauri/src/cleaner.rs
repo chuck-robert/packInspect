@@ -10,8 +10,7 @@
 use crate::error::{AppError, AppResult};
 use crate::fsutil;
 use crate::manager;
-use crate::models::{CleanCandidate, CleanKind, CleanResult};
-use crate::packages::PackageRecord;
+use crate::models::{CleanCandidate, CleanKind, CleanResult, PackageRecord};
 use crate::validate;
 use crate::whitelist;
 use std::path::{Path, PathBuf};

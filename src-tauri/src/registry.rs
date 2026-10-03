@@ -10,7 +10,7 @@ use crate::fsutil;
 use crate::models::{RegistryConfig, RegistryEntry};
 use crate::validate;
 use crate::whitelist;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// 已知镜像源提示（用于界面上打「官方 / 镜像」标签）
 const KNOWN_REGISTRIES: &[(&str, &str)] = &[

@@ -65,9 +65,32 @@ commands → report → manager · packages · cleaner · registry
 ## 3. 环境要求
 
 - **Node.js** ≥ 18（前端构建；实测 Node 24 通过）
-- **Rust** ≥ 1.77.2 + `cargo`
-- **Windows**：需安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（MSVC 链接器）
+- **Rust** ≥ 1.77.2 + `cargo`（实测 1.99.0 通过）
+- **Windows**：需安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（MSVC 链接器）。
+  命令行调用 `cargo` 前需先执行 `vcvars64.bat`，或在「Developer PowerShell for VS」中操作。
 - **WebView2**：Windows 10/11 通常已内置
+
+### 网络受限时
+
+`rustup` / `cargo` 首次拉取依赖较慢，可用镜像或本地代理：
+
+```powershell
+# 方式一：本地代理（如 Clash 监听 7890）
+$env:HTTP_PROXY  = 'http://127.0.0.1:7890'
+$env:HTTPS_PROXY = 'http://127.0.0.1:7890'
+
+# 方式二：字节 rsproxy 镜像
+$env:RUSTUP_DIST_SERVER = 'https://rsproxy.cn'
+$env:RUSTUP_UPDATE_ROOT = 'https://rsproxy.cn/rustup'
+
+# cargo 依赖走镜像（写入 ~/.cargo/config.toml）
+# [source.crates-io]
+# replace-with = 'rsproxy-sparse'
+# [source.rsproxy-sparse]
+# registry = "sparse+https://rsproxy.cn/index/"
+```
+
+`rustup toolchain install` 在慢速网络下可能长时间停在 `.partial` 文件上；加代理后重跑会自动从中断处恢复。
 
 ## 4. 开发
 
@@ -133,3 +156,15 @@ npm run typecheck             # 前端类型与数据契约校验
 
 安全相关的单元测试集中在 `validate.rs`（注入攻击、路径逃逸）、`whitelist.rs`（未知操作被拒）、
 `cleaner.rs`（禁止目录名、候选 id 稳定性、dry-run 无副作用）。
+
+### 当前验证状态
+
+| 项目 | 命令 | 结果 |
+|---|---|---|
+| Rust 编译（含测试目标） | `cargo check --all-targets` | ✅ 通过，0 告警 |
+| Rust 单元测试 | `cargo test --lib` | ✅ 26 passed / 0 failed（含对已安装管理器的端到端命令执行） |
+| 前端类型检查 | `npx vue-tsc --noEmit` | ✅ 通过 |
+| 前端生产构建 | `npx vite build` | ✅ 通过（JS 113 KB / gzip 42 KB） |
+
+尚未验证：`npm run tauri:dev` 的完整窗口启动与真实 GUI 交互、`npm run tauri:build` 打包安装程序
+（需要 WebView2 运行时与更长时间的首轮 release 编译）。

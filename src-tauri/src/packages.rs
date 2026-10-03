@@ -226,37 +226,50 @@ fn dist_info_path(site: &Path, name: &str, version: Option<&str>) -> PathBuf {
 // rust / go
 // ---------------------------------------------------------------------------
 
-/// 解析 `cargo install --list` 输出
+/// 解析 `cargo install --list` 输出。
+///
+/// 真实格式（注意：**包名行也带 4 空格缩进**，靠行尾冒号与产物行区分）：
+/// ```text
+///     cargo-edit v0.12.0:
+///         cargo-edit.exe
+///         cargo-edit
+///     ripgrep v14.1.0:
+///         rg.exe
+/// ```
 fn parse_cargo_install_list(text: &str) -> Vec<PackageRecord> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i].trim_end();
-        if !line.starts_with(' ') && line.contains(" v") && line.ends_with(':') {
-            let head = line.trim_end_matches(':');
-            if let Some((name, version)) = head.split_once(" v") {
-                // 下一行缩进内容是真实安装路径
-                let path = lines
-                    .get(i + 1)
-                    .map(|l| l.trim())
-                    .filter(|l| l.starts_with('(') || Path::new(l).exists())
-                    .map(|l| l.trim_matches(['(', ')']).to_string());
-                out.push(PackageRecord {
-                    name: name.trim().to_string(),
-                    version: Some(version.trim().to_string()),
-                    manager: "cargo".into(),
-                    scope: "global".into(),
-                    path,
-                    size: None,
-                    redundant: false,
-                    redundant_reason: None,
-                    description: None,
-                    latest_version: None,
-                });
-            }
+
+    for (i, raw) in lines.iter().enumerate() {
+        // 只有 `<name> v<version>:` 这一种行会被解析
+        let Some(head) = raw.trim().strip_suffix(':') else { continue };
+        let head = head.trim();
+        let Some((name, version)) = head.rsplit_once(" v") else { continue };
+        let (name, version) = (name.trim(), version.trim());
+        if name.is_empty() || version.is_empty() || name.contains(char::is_whitespace) {
+            continue;
         }
-        i += 1;
+        // 紧随其后的缩进行是安装路径提示（形如 `(path)` 或裸路径）
+        let path = lines
+            .iter()
+            .skip(i + 1)
+            .take_while(|l| l.starts_with([' ', '\t']))
+            .map(|l| l.trim())
+            .find(|l| l.starts_with('(') || Path::new(l).exists())
+            .map(|l| l.trim_matches(['(', ')']).to_string());
+
+        out.push(PackageRecord {
+            name: name.to_string(),
+            version: Some(version.to_string()),
+            manager: "cargo".into(),
+            scope: "global".into(),
+            path,
+            size: None,
+            redundant: false,
+            redundant_reason: None,
+            description: None,
+            latest_version: None,
+        });
     }
     out
 }
