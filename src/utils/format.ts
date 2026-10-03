@@ -28,6 +28,11 @@ export function formatBytesShort(bytes: number | null | undefined): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)}${units[idx]}`
 }
 
+/** 只输出日期与时间（状态栏用），与 formatDateTime 同源 */
+export function formatDate(input: string | null | undefined): string {
+  return formatDateTime(input)
+}
+
 export function formatDateTime(input: string | null | undefined): string {
   if (!input) return '—'
   const date = new Date(input)

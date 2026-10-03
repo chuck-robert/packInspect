@@ -242,6 +242,44 @@ pre,
   position: relative;
 }
 
+.statusbar__progress {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.statusbar__bar {
+  width: 160px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+  flex: none;
+}
+.statusbar__bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease-out;
+}
+.statusbar__text {
+  color: var(--accent-hover);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.statusbar__failed {
+  color: var(--warn);
+  cursor: help;
+}
+.statusbar__filter {
+  color: var(--accent-hover);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .statusbar {
   grid-area: status;
   height: var(--statusbar-height);
@@ -1331,6 +1369,30 @@ table.data tbody tr.is-selected td {
   color: var(--ok);
 }
 
+/* ---------------------------------------------------------------- 包操作对话框 */
+.ops-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  background: var(--bg-base);
+}
+.ops-command code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ok);
+  word-break: break-all;
+  user-select: text;
+}
+.ops-output .diff {
+  max-height: 200px;
+  margin-top: 4px;
+}
+
 /* ---------------------------------------------------------------- 插件树 */
 .section-title {
   display: flex;
@@ -1399,6 +1461,55 @@ table.data tbody tr.is-selected td {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ---------------------------------------------------------------- 镜像源 */
+.registry-layout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.registry-list {
+  width: 220px;
+  flex: none;
+}
+.registry-list__body {
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+  padding: 5px;
+}
+.registry-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.registry-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.registry-item.is-active {
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+.registry-item.is-unsupported {
+  opacity: 0.55;
+}
+.registry-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------- 设置页 */

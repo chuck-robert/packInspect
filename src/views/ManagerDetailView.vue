@@ -9,15 +9,24 @@
 import { computed, onMounted, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import type { ManagerTab } from '@/types'
+import type { ManagementAction, ManagerTab, PackageRecord } from '@/types'
 import ManagerLogo from '@/components/ManagerLogo.vue'
 import ManagerPackagesPanel from '@/components/ManagerPackagesPanel.vue'
 import ManagerBrowsePanel from '@/components/ManagerBrowsePanel.vue'
+import PackageOpDialog from '@/components/PackageOpDialog.vue'
 import { formatBytes, formatCount, ellipsisPath } from '@/utils/format'
 
 const store = useAppStore()
 const { t } = useI18n()
 const expanded = ref(false)
+/** 待执行的真实操作（右键菜单发起，交给 PackageOpDialog 确认） */
+const opState = ref<{ record: PackageRecord; action: ManagementAction } | null>(null)
+const opOpen = ref(false)
+
+function requestOp(record: PackageRecord, action: ManagementAction) {
+  opState.value = { record, action }
+  opOpen.value = true
+}
 
 const manager = computed(() => store.activeManagerInfo)
 
@@ -227,7 +236,7 @@ onMounted(() => {
         </template>
 
         <!-- 包列表 -->
-        <ManagerPackagesPanel v-else-if="store.managerTab === 'packages'" :manager="manager" />
+        <ManagerPackagesPanel v-else-if="store.managerTab === 'packages'" :manager="manager" @operate="requestOp" />
 
         <!-- 浏览 / 安装 -->
         <ManagerBrowsePanel v-else-if="store.managerTab === 'browse'" :manager="manager" />
@@ -270,5 +279,11 @@ onMounted(() => {
         </template>
       </template>
     </div>
+
+    <PackageOpDialog
+      v-model:open="opOpen"
+      :record="opState?.record ?? null"
+      :action="opState?.action ?? null"
+    />
   </section>
 </template>

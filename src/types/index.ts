@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 后端数据结构镜像。
  *
  * ⚠️ 与 `src-tauri/src/models.rs` 一一对应（Rust 侧 `rename_all = "camelCase"`）。
@@ -248,6 +248,34 @@ export interface InstallPlan {
   online: boolean
   requiresAdmin: boolean
   explanation: string
+}
+
+/** 单个管理器的扫描结果（渐进式扫描的返回单元） */
+export interface ManagerScanResult {
+  managerId: string
+  packages: PackageRecord[]
+  cache: CacheStats | null
+  durationMs: number
+  /** 是否成功读取；false 时 packages 为空且 reason 有值 */
+  ok: boolean
+  reason: string | null
+}
+
+/** 一次真实包管理操作的结果 */
+export interface PackageOpResult {
+  managerId: string
+  package: string
+  /** update | uninstall | install */
+  action: string
+  /** 等价命令（展示用，不用于执行） */
+  command: string
+  success: boolean
+  timedOut: boolean
+  exitCode: number | null
+  stdout: string
+  stderr: string
+  message: string | null
+  durationMs: number
 }
 
 /** 全局搜索命中的一条结果 */

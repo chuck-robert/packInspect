@@ -8,12 +8,15 @@
 import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import type { ManagerInfo, PackageRecord } from '@/types'
+import type { ManagementAction, ManagerInfo, PackageRecord } from '@/types'
 import PackageContextMenu from '@/components/PackageContextMenu.vue'
 import PackageDetailDrawer from '@/components/PackageDetailDrawer.vue'
 import { formatBytesShort, formatCount } from '@/utils/format'
 
 const props = defineProps<{ manager: ManagerInfo }>()
+
+/** 把右键菜单里的真实操作请求向上转发（确认对话框由父级持有） */
+const emit = defineEmits<{ operate: [PackageRecord, ManagementAction] }>()
 
 const store = useAppStore()
 const { t } = useI18n()
@@ -141,6 +144,7 @@ function openMenu(record: PackageRecord, event: MouseEvent) {
     @close="menuState = null"
     @inspect="detailTarget = $event"
     @manage="detailTarget = $event"
+    @operate="(record, action) => emit('operate', record, action)"
   />
 
   <PackageDetailDrawer :record="detailTarget" @close="detailTarget = null" />

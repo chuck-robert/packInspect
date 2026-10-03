@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 已安装包列表（按管理器过滤的独立视图入口）。
  *
@@ -8,9 +8,10 @@
 import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import type { PackageRecord } from '@/types'
+import type { ManagementAction, PackageRecord } from '@/types'
 import PackageContextMenu from '@/components/PackageContextMenu.vue'
 import PackageDetailDrawer from '@/components/PackageDetailDrawer.vue'
+import PackageOpDialog from '@/components/PackageOpDialog.vue'
 import { formatBytesShort, formatCount } from '@/utils/format'
 
 const store = useAppStore()
@@ -22,6 +23,14 @@ const sortKey = ref<SortKey>('name')
 const sortAsc = ref(true)
 const detailTarget = ref<PackageRecord | null>(null)
 const menuState = ref<{ record: PackageRecord; x: number; y: number } | null>(null)
+/** 待执行的真实操作（右键菜单发起，交给 PackageOpDialog 确认） */
+const opState = ref<{ record: PackageRecord; action: ManagementAction } | null>(null)
+const opOpen = ref(false)
+
+function requestOp(record: PackageRecord, action: ManagementAction) {
+  opState.value = { record, action }
+  opOpen.value = true
+}
 
 const rows = computed(() => {
   const list = [...store.visiblePackages]
@@ -147,8 +156,15 @@ function openMenu(record: PackageRecord, event: MouseEvent) {
       @close="menuState = null"
       @inspect="detailTarget = $event"
       @manage="detailTarget = $event"
+      @operate="requestOp"
     />
 
     <PackageDetailDrawer :record="detailTarget" @close="detailTarget = null" />
+
+    <PackageOpDialog
+      v-model:open="opOpen"
+      :record="opState?.record ?? null"
+      :action="opState?.action ?? null"
+    />
   </section>
 </template>

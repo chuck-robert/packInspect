@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 设置页：语言 / 主题 / 启动行为 + 运行环境与安全模型说明。
  *
@@ -7,7 +7,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useSettingsStore, type ThemeName } from '@/stores/settings'
 import { useAppStore } from '@/stores/app'
-import { useI18n, type Locale } from '@/i18n'
+import { AVAILABLE_LOCALES, useI18n } from '@/i18n'
 import { api, IpcError } from '@/api'
 
 const settings = useSettingsStore()
@@ -30,10 +30,7 @@ async function openAboutLink(url: string) {
   await store.openUrl(url)
 }
 
-const LANGUAGES: { value: Locale; label: string }[] = [
-  { value: 'zh-CN', label: '简体中文' },
-  { value: 'en-US', label: 'English' },
-]
+const LANGUAGES = AVAILABLE_LOCALES
 
 const THEMES = computed<{ value: ThemeName; label: string }[]>(() => [
   { value: 'dark', label: t('settings.themeDark') },

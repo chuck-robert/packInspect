@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 全局状态。单一 store 足够：数据量不大，且各视图之间强耦合（扫描结果 → 管理页 / 表格 / 缓存 / 清理）。
  */
 
@@ -15,6 +15,7 @@ import type {
   InstallPlan,
   ManagementAction,
   ManagerInfo,
+  PackageOpResult,
   PackageRecord,
   ManagerTab,
   PluginNode,
@@ -47,6 +48,20 @@ interface State {
   booting: boolean
   detecting: boolean
   scanning: boolean
+  /**
+   * 渐进扫描进度：按管理器逐个推进，每完成一个就立刻渲染，
+   * 用户不必等最慢的管理器（winget/pip 各要几秒）。
+   */
+  scanProgress: {
+    /** 本轮要扫的管理器总数 */
+    total: number
+    /** 已完成数量 */
+    completed: number
+    /** 正在扫描的管理器 id */
+    current: string | null
+    /** 失败的管理器 → 原因 */
+    failed: Record<string, string>
+  }
   loadingCandidates: boolean
   savingRegistry: boolean
 
@@ -87,6 +102,7 @@ export const useAppStore = defineStore('app', {
     booting: false,
     detecting: false,
     scanning: false,
+    scanProgress: { total: 0, completed: 0, current: null, failed: {} },
     loadingCandidates: false,
     savingRegistry: false,
     view: 'manage',
@@ -327,6 +343,63 @@ export const useAppStore = defineStore('app', {
       this.installPlan = null
     },
 
+    /**
+     * 执行真实的包管理操作（更新 / 卸载 / 安装）。
+     *
+     * `confirm` 恒为 true —— 调用方（PackageOpDialog）已经承担了二次确认的 UI 责任，
+     * 后端也会再校验一次这个标志位，避免将来有别的调用点绕过确认。
+     * 执行后**必须重扫该管理器**，否则列表显示的版本会与磁盘不一致。
+     */
+    async runPackageOp(managerId: string, packageName: string, action: string) {
+      const started = Date.now()
+      try {
+        const result = await api.runPackageOp(managerId, packageName, action, true)
+        this.pushLog(
+          `${managerId} ${action} ${packageName}：${result.success ? '成功' : '失败'}` +
+            `${result.command ? `（${result.command}）` : ''}`,
+        )
+        // 环境已变化，重扫这一个管理器即可保持列表与磁盘一致
+        try {
+          const refreshed = await api.scanManager(managerId, false, 60_000)
+          if (refreshed.ok) {
+            const others = (this.report?.packages ?? []).filter((p) => p.manager !== managerId)
+            const merged = [...others, ...refreshed.packages].sort(
+              (a, b) => a.manager.localeCompare(b.manager) || a.name.localeCompare(b.name),
+            )
+            if (this.report) {
+              this.report.packages = merged
+              this.report.totalPackages = merged.length
+            }
+            if (refreshed.cache) {
+              const idx = this.caches.findIndex((c) => c.managerId === managerId)
+              if (idx >= 0) this.caches[idx] = refreshed.cache
+              else this.caches.push(refreshed.cache)
+            }
+            this.pluginsCache = {}
+          }
+        } catch {
+          // 重扫失败不影响操作结果本身
+        }
+        return result
+      } catch (e) {
+        const err = e instanceof IpcError ? e : IpcError.from(e)
+        this.pushLog(`${managerId} ${action} ${packageName} 失败: ${err.message}`)
+        return {
+          managerId,
+          package: packageName,
+          action,
+          command: '',
+          success: false,
+          timedOut: false,
+          exitCode: null,
+          stdout: '',
+          stderr: '',
+          message: err.message,
+          durationMs: Date.now() - started,
+        } as PackageOpResult
+      }
+    },
+
     setActiveManager(id: string | null) {
       this.activeManager = id
       this.keyword = ''
@@ -409,40 +482,104 @@ export const useAppStore = defineStore('app', {
     },
 
     /**
-     * 执行扫描。`measureSize` 会逐个目录统计体积，明显更慢，因此作为可选开关。
+     * 执行扫描。
+     *
+     * 采用**逐管理器渐进式**扫描而非一次性全量：
+     * 调用 `scan_manager` 一个一个来，每完成一个就把结果并进 report，
+     * 界面上立即能看到该管理器的包 —— 用户不必盯着空白页等最慢的那个
+     * （winget 要几秒、pip 要几秒、cargo 可能要十几秒）。
+     * 进度写入 `scanProgress`，由底部状态栏渲染进度条。
+     *
+     * `measureSize` 会逐个目录统计体积，明显更慢，因此作为可选开关。
      * `silent` 用于启动自动扫描：不弹成功提示，避免打扰。
      */
     async scan(options: { managers?: string[]; measureSize?: boolean; silent?: boolean } = {}) {
+      const targets =
+        options.managers && options.managers.length > 0
+          ? options.managers
+          : this.installed.map((m) => m.id)
+
+      if (targets.length === 0) {
+        if (!options.silent) this.notify('warn', '没有可扫描的包管理器')
+        return
+      }
+
       this.scanning = true
       this.error = null
-      try {
-        const report = await api.runScan({
-          managers: options.managers ?? (this.activeManager ? [this.activeManager] : []),
-          measurePackageSize: options.measureSize ?? false,
-          timeoutMs: 30_000,
-        })
-        this.report = report
-        this.caches = report.caches
-        // 扫描结果与旧候选不再对应，强制重置两阶段状态
-        this.candidates = []
-        this.cleanPhase = 'idle'
-        this.previewResults = []
-        this.pluginsCache = {}
-        this.pushLog(
-          `扫描完成：${report.totalPackages} 个包，缓存 ${report.totalCacheBytes} 字节，耗时 ${report.durationMs} ms`,
+      this.scanProgress = { total: targets.length, completed: 0, current: null, failed: {} }
+
+      // 重置这一轮的包与缓存，但保留管理器探测结果
+      const collectedPackages: PackageRecord[] = []
+      const collectedCaches: CacheStats[] = []
+      this.caches = []
+      this.candidates = []
+      this.cleanPhase = 'idle'
+      this.previewResults = []
+      this.pluginsCache = {}
+
+      const startedAt = performance.now()
+      const measure = options.measureSize ?? false
+
+      /** 把已收集到的内容组装成 report（每扫完一个管理器就重建一次） */
+      const rebuildReport = () => {
+        const sorted = [...collectedPackages].sort(
+          (a, b) => a.manager.localeCompare(b.manager) || a.name.localeCompare(b.name),
         )
+        this.report = {
+          generatedAt: new Date().toISOString(),
+          hostname: this.report?.hostname ?? null,
+          os: this.report?.os ?? '',
+          managers: this.managers.filter((m) => targets.includes(m.id)),
+          packages: sorted,
+          caches: [...collectedCaches],
+          totalPackages: sorted.length,
+          totalCacheBytes: collectedCaches.reduce((sum, c) => sum + c.totalBytes, 0),
+          durationMs: Math.round(performance.now() - startedAt),
+        }
+      }
+
+      try {
+        for (const managerId of targets) {
+          this.scanProgress.current = managerId
+          try {
+            const result = await api.scanManager(managerId, measure, 30_000)
+            if (result.ok) {
+              collectedPackages.push(...result.packages)
+              if (result.cache) collectedCaches.push(result.cache)
+            } else if (result.reason) {
+              this.scanProgress.failed[managerId] = result.reason
+            }
+            // 无论成功与否都立即渲染，让用户看到进度
+            rebuildReport()
+          } catch (e) {
+            const err = e instanceof IpcError ? e : IpcError.from(e)
+            this.scanProgress.failed[managerId] = err.message
+            this.pushLog(`扫描 ${managerId} 失败: ${err.message}`)
+          } finally {
+            this.scanProgress.completed += 1
+          }
+        }
+
+        this.scanProgress.current = null
+        const report = this.report
+        const failedCount = Object.keys(this.scanProgress.failed).length
+        this.pushLog(
+          `渐进扫描完成：${report?.totalPackages ?? 0} 个包，缓存 ${report?.totalCacheBytes ?? 0} 字节，` +
+            `耗时 ${report?.durationMs ?? 0} ms，失败 ${failedCount} 个管理器`,
+        )
+
         if (!options.silent) {
+          const suffix = failedCount ? `，${failedCount} 个管理器未读取到` : ''
           this.notify(
             'success',
-            options.measureSize
-              ? `扫描完成，共 ${report.totalPackages} 个包（含体积统计）`
-              : `扫描完成，共 ${report.totalPackages} 个包`,
+            `扫描完成，共 ${report?.totalPackages ?? 0} 个包${measure ? '（含体积统计）' : ''}${suffix}`,
           )
         }
       } catch (e) {
         this.handleError(e, '扫描')
       } finally {
         this.scanning = false
+        this.scanProgress.current = null
       }
     },
 

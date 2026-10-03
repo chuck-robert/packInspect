@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 包右键菜单。
  *
@@ -25,6 +25,8 @@ const emit = defineEmits<{
   inspect: [PackageRecord]
   /** 展开包内插件树 */
   manage: [PackageRecord]
+  /** 请求执行真实操作（更新 / 卸载 / 安装），由父组件弹确认框 */
+  operate: [PackageRecord, ManagementAction]
 }>()
 
 const store = useAppStore()
@@ -74,6 +76,13 @@ async function run(action: ManagementAction) {
       break
     case 'openDocs':
       if (action.note) await store.openUrl(action.note)
+      emit('close')
+      break
+    case 'update':
+    case 'uninstall':
+    case 'install':
+      // 真实执行交给父组件的确认对话框：本组件只负责发起意图
+      emit('operate', props.record, action)
       emit('close')
       break
     default:

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tauri IPC 封装层。
  *
  * 这里是前端与系统的**唯一**通道：
@@ -22,7 +22,9 @@ import type {
   ManagementAction,
   ManagerInfo,
   ManagerLogo,
+  ManagerScanResult,
   OpenLinkRequest,
+  PackageOpResult,
   PackageRecord,
   PluginNode,
   PluginsRequest,
@@ -99,6 +101,20 @@ export const api = {
   runScan: (request: ScanRequest) => call<ScanReport>('run_scan', { request }),
 
   getCacheStats: (managerId: string) => call<CacheStats>('get_cache_stats', { managerId }),
+
+  /**
+   * 扫描**单个**管理器。渐进式扫描的基础：每完成一个就能立刻渲染。
+   * 失败不抛错，返回 ok: false + eason。
+   */
+  scanManager: (managerId: string, measurePackageSize = false, timeoutMs = 30_000) =>
+    call<ManagerScanResult>('scan_manager', { managerId, measurePackageSize, timeoutMs }),
+
+  /**
+   * 执行真实的包管理操作（更新 / 卸载 / 安装）。
+   * confirm 必须为 true —— 前端必须先完成二次确认。
+   */
+  runPackageOp: (managerId: string, packageName: string, action: string, confirm: boolean) =>
+    call<PackageOpResult>('run_package_op', { managerId, package: packageName, action, confirm }),
 
   /** 只读枚举清理候选，绝不删除 */
   listCleanCandidates: (timeoutMs?: number) =>
