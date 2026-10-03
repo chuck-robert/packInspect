@@ -78,12 +78,59 @@ async function main() {
   )
   out(`${sample.name} 的包内子节点 ${plugins.length} 条`, plugins.slice(0, 8))
 
-  // 6. 图标命令
-  const icon = await invoke<{ key: string; dataUri: string; cached: boolean }>('package_icon', {
-    managerId: sample.manager,
-    package: sample.name,
+  // 6. 管理器品牌 logo（单包图标已移除：图标表达的是「来自哪个包管理器」）
+  const logos = await invoke<Array<{ key: string; dataUri: string; cached: boolean }>>(
+    'manager_logos',
+    { request: { theme: 'dark', managers: [sample.manager] } },
+  )
+  out('品牌 logo', {
+    key: logos[0]?.key,
+    cached: logos[0]?.cached,
+    前缀: logos[0]?.dataUri.slice(0, 32),
   })
-  out('图标命令', { key: icon.key, cached: icon.cached, 前缀: icon.dataUri.slice(0, 32) })
+
+  // 6b. 在线浏览：应区分「查过但没有」/「网络失败」/「该生态不支持」
+  const browse = await invoke<{
+    packages: unknown[]
+    attempted: boolean
+    failed: boolean
+    note: string | null
+    hint: string | null
+  }>('browse_packages', {
+    request: { manager: sample.manager, query: 'vue', limit: 5, timeoutMs: 20_000 },
+  })
+  out('在线浏览', {
+    attempted: browse.attempted,
+    failed: browse.failed,
+    命中: browse.packages.length,
+    note: browse.note,
+    hint: browse.hint,
+  })
+
+  // 6c. 单管理器扫描（渐进式扫描的基础）
+  const one = await invoke<{ ok: boolean; packages: unknown[]; reason: string | null }>(
+    'scan_manager',
+    { managerId: sample.manager, measurePackageSize: false, timeoutMs: 30_000 },
+  )
+  out(`单管理器扫描 ${sample.manager}`, {
+    ok: one.ok,
+    包数: one.packages.length,
+    reason: one.reason,
+  })
+
+  // 6d. 包支持的右键动作（更新/卸载/安装是否真的可用）
+  const actions = await invoke<Array<{ action: string; enabled: boolean; destructive: boolean }>>(
+    'package_actions',
+    { managerId: sample.manager, package: sample.name, scope: 'global' },
+  )
+  out(
+    '可执行动作',
+    actions.filter((a) => a.enabled).map((a) => a.action),
+  )
+  out(
+    '不可执行动作',
+    actions.filter((a) => !a.enabled).map((a) => a.action),
+  )
 
   // 7. 设置往返
   const before = await invoke<Record<string, unknown>>('get_settings')

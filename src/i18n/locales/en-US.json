@@ -286,5 +286,8 @@
     "browse.alreadyInstalled":  "already installed",
     "browse.reinstall":  "Reinstall",
     "browse.reinstallHint":  "Already installed locally; click to build a reinstall command",
-    "browse.emptyHint":  "Try another keyword; for ecosystems without keyword search, enter the full package name."
+    "browse.emptyHint":  "Try another keyword; for ecosystems without keyword search, enter the full package name.",
+    "status.finishing":  "Finishing…",
+    "packages.loading":  "Reading packages for this manager…",
+    "packages.loadingHint":  "Results appear as soon as each manager finishes; you do not need to wait for all of them."
 }

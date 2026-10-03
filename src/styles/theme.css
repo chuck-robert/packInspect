@@ -130,12 +130,18 @@ pre,
 }
 
 /* ---------------------------------------------------------------- 自绘标题栏 */
+/*
+ * 用 grid 而不是 flex 来排「品牌 · 搜索 · 窗口控制」：
+ * 左右两列设为等宽（1fr），搜索框因此**真正居中**于窗口，
+ * 不会因为左边品牌文字比右边三个按钮宽而偏左。
+ */
 .titlebar {
   grid-area: titlebar;
   height: var(--titlebar-height);
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr minmax(220px, 520px) 1fr;
   align-items: center;
-  gap: 12px;
+  column-gap: 8px;
   padding-left: 12px;
   background: var(--titlebar-bg);
   border-bottom: 1px solid var(--border-subtle);
@@ -146,11 +152,22 @@ pre,
   z-index: 60;
 }
 
+/* 品牌与窗口控件保持在上层，确保按钮的点击不被标题栏的拖拽区吃掉 */
+.titlebar__brand,
+.titlebar__search,
+.titlebar__controls {
+  position: relative;
+  z-index: 1;
+}
+
 .titlebar__brand {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: none;
+  min-width: 0;
+  /* 品牌整体在左列内靠左；左列是 1fr，因此搜索框仍在窗口正中 */
+  justify-self: start;
+  height: 100%;
 }
 
 .titlebar__mark {
@@ -163,30 +180,26 @@ pre,
   font-weight: 700;
   display: grid;
   place-items: center;
+  flex: none;
 }
 
 .titlebar__name {
   font-weight: 600;
   font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* 搜索框容器：居中且限宽，避免超宽窗口里被拉得过长 */
+/* 搜索框容器：占据中间那一列，天然居中 */
 .titlebar__search {
-  flex: 0 1 520px;
-  margin-left: 8px;
-  min-width: 220px;
-}
-
-/* 拖拽填充区：占据剩余空间，同时保证标题栏空白处也能拖动窗口 */
-.titlebar__spacer {
-  flex: 1;
-  height: 100%;
-  min-width: 20px;
+  width: 100%;
+  min-width: 0;
 }
 
 .titlebar__controls {
   display: flex;
-  flex: none;
+  justify-self: end;
   height: 100%;
 }
 
@@ -242,32 +255,36 @@ pre,
   position: relative;
 }
 
+/* ------------------------------------------------- 状态栏内的扫描进度（右端） */
+/* 放在 footer 右端而不是左端：左端紧邻侧边栏，会被读成侧边栏的一部分 */
 .statusbar__progress {
   display: flex;
   align-items: center;
   gap: 9px;
-  min-width: 0;
+  flex: none;
+}
+.statusbar__progress-text {
+  color: var(--accent-hover);
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .statusbar__bar {
-  width: 160px;
+  width: 150px;
   height: 5px;
+  flex: none;
   border-radius: 3px;
   background: var(--bg-overlay);
   border: 1px solid var(--border-subtle);
   overflow: hidden;
-  flex: none;
 }
 .statusbar__bar-fill {
   height: 100%;
   background: var(--accent);
   transition: width 0.25s ease-out;
 }
-.statusbar__text {
-  color: var(--accent-hover);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
 .statusbar__failed {
   color: var(--warn);
   cursor: help;

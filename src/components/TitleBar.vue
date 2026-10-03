@@ -123,7 +123,7 @@ async function closeWindow() {
 </script>
 
 <template>
-  <header class="titlebar">
+  <header class="titlebar" data-tauri-drag-region>
     <div class="titlebar__brand" data-tauri-drag-region>
       <span class="titlebar__mark">PI</span>
       <span class="titlebar__name">{{ t('app.name') }}</span>
@@ -204,9 +204,6 @@ async function closeWindow() {
         </div>
       </div>
     </div>
-
-    <!-- 拖拽填充区：保证标题栏空白处也能拖动窗口 -->
-    <div class="titlebar__spacer" data-tauri-drag-region />
 
     <div class="titlebar__controls">
       <button class="winbtn" :title="t('titlebar.minimize')" @click="minimize">

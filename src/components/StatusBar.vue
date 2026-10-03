@@ -2,10 +2,13 @@
 /**
  * 底部状态栏。
  *
- * 除了主机/范围信息，还承担**扫描进度展示**：
- * 渐进扫描时显示「已完成 / 总数」进度条与当前正在扫描的管理器 ——
- * 这是用户判断「是不是卡住了」的主要依据，因此放在常驻可见的位置。
- * 失败的管理器也会在这里明确列出，而不是静默吞掉。
+ * 左侧是常驻信息（主机、扫描时间、包数、缓存），
+ * **右侧**是扫描进度（进度条 + 已完成/总数 + 当前管理器）。
+ *
+ * 进度条放在这一行的右端而不是左端：
+ * 左端紧邻侧边栏，阅读上会被当成「侧边栏内容的一部分」；
+ * 而且左端要与主机名、时间等文字挤在一起，扫描开始/结束时文字长度跳变明显。
+ * 放在右端（`flex: 1` 撑开中间空隙之后）位置稳定，也不干扰左侧信息的读取。
  */
 import { computed } from 'vue'
 import { useAppStore } from '@/stores/app'
@@ -21,15 +24,14 @@ const percent = computed(() =>
     ? 0
     : Math.round((progress.value.completed / progress.value.total) * 100),
 )
-const failedIds = computed(() => Object.keys(progress.value.failed))
 const currentName = computed(() => {
   const id = progress.value.current
   if (!id) return ''
   return store.managers.find((m) => m.id === id)?.name ?? id
 })
+const failedIds = computed(() => Object.keys(progress.value.failed))
 
 const scanState = computed(() => {
-  if (store.scanning) return t('toolbar.scanning')
   if (store.detecting) return t('toolbar.detecting')
   if (!store.report) return '—'
   return formatDate(store.report.generatedAt)
@@ -44,30 +46,19 @@ const host = computed(() => {
 
 <template>
   <footer class="statusbar">
-    <!-- 扫描进度：优先展示，占满中部空间 -->
-    <div v-if="store.scanning" class="statusbar__progress">
-      <div class="statusbar__bar">
-        <div class="statusbar__bar-fill" :style="{ width: `${percent}%` }" />
-      </div>
-      <span class="statusbar__text mono">
-        {{ t('status.scanningProgress', { done: progress.completed, total: progress.total }) }}
-        <template v-if="currentName"> · {{ currentName }}</template>
-      </span>
-    </div>
+    <!-- 左：常驻信息 -->
+    <span>{{ host }}</span>
+    <span>{{ scanState }}</span>
+    <span v-if="store.report">
+      {{ formatCount(store.report.totalPackages) }} {{ t('toolbar.packages') }} /
+      {{ formatBytes(store.report.totalCacheBytes) }}
+    </span>
+    <span v-if="store.report && !store.scanning">{{ formatDuration(store.report.durationMs) }}</span>
 
-    <template v-else>
-      <span>{{ host }}</span>
-      <span>{{ scanState }}</span>
-      <span v-if="store.report">
-        {{ formatCount(store.report.totalPackages) }} {{ t('toolbar.packages') }} /
-        {{ formatBytes(store.report.totalCacheBytes) }}
-      </span>
-      <span v-if="store.report">{{ formatDuration(store.report.durationMs) }}</span>
-    </template>
-
+    <!-- 中间空隙：把进度推到右端 -->
     <span style="flex: 1" />
 
-    <!-- 失败的管理器：明确列出而不是静默吞掉 -->
+    <!-- 失败项提示 -->
     <span v-if="failedIds.length" class="statusbar__failed" :title="t('status.scanFailedHint')">
       {{ t('status.scanFailed', { count: failedIds.length }) }}
     </span>
@@ -76,6 +67,17 @@ const host = computed(() => {
       {{ t('status.filteredBy', { keyword: store.keyword }) }}
     </span>
 
-    <span>{{ store.activeManager ?? t('nav.all') }}</span>
+    <!-- 右：扫描进度（footer 内，不是独立浮层） -->
+    <div v-if="store.scanning" class="statusbar__progress">
+      <span class="mono statusbar__progress-text">
+        {{ t('toolbar.scanning') }} {{ progress.completed }}/{{ progress.total }}
+        <template v-if="currentName"> · {{ currentName }}</template>
+      </span>
+      <div class="statusbar__bar">
+        <div class="statusbar__bar-fill" :style="{ width: `${percent}%` }" />
+      </div>
+    </div>
+
+    <span v-if="!store.scanning">{{ store.activeManager ?? t('nav.all') }}</span>
   </footer>
 </template>

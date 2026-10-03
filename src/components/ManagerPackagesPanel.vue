@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 某个包管理器的已安装包列表（管理器详情页的「包列表」分页）。
  *
@@ -49,6 +49,11 @@ const rows = computed(() => {
 
 const hasSize = computed(() => rows.value.some((r) => r.size !== null))
 
+/** 当前正在扫描的就是这个管理器（用于区分「还在加载」与「搜不到」） */
+const managerScanning = computed(
+  () => store.scanning && store.scanProgress.current === props.manager.id,
+)
+
 function toggleSort(key: SortKey) {
   if (sortKey.value === key) sortAsc.value = !sortAsc.value
   else {
@@ -80,10 +85,25 @@ function openMenu(record: PackageRecord, event: MouseEvent) {
       />
     </div>
 
+    <!--
+      空态分三种情况，不要混为一谈：
+      1. 该管理器正在扫描 → 说明数据还没到，不是「搜不到」
+      2. 有搜索词 → 才是真的没有匹配
+      3. 既没扫也没搜 → 列表本来就是空的
+    -->
     <div v-if="rows.length === 0" class="empty" style="padding: 40px 24px">
-      <div class="empty__icon">📦</div>
-      <div>{{ store.keyword ? t('packages.noMatch') : t('packages.emptyTitle') }}</div>
-      <div class="hint">{{ store.keyword ? t('packages.noMatchHint') : t('packages.emptyHint') }}</div>
+      <template v-if="managerScanning">
+        <span class="spinner" />
+        <div>{{ t('packages.loading') }}</div>
+        <div class="hint">{{ t('packages.loadingHint') }}</div>
+      </template>
+      <template v-else>
+        <div class="empty__icon">📦</div>
+        <div>{{ store.keyword ? t('packages.noMatch') : t('packages.emptyTitle') }}</div>
+        <div class="hint">
+          {{ store.keyword ? t('packages.noMatchHint') : t('packages.emptyHint') }}
+        </div>
+      </template>
     </div>
 
     <div v-else class="table-wrap" style="max-height: calc(100vh - 320px)">

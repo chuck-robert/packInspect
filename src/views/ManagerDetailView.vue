@@ -6,7 +6,7 @@
  * 再用分页进入「包列表 / 浏览安装 / 管理操作」。
  * 未安装时整页变成下载引导 —— 没有可执行文件就读不到包列表，硬展示空表没有意义。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
 import type { ManagementAction, ManagerTab, PackageRecord } from '@/types'
@@ -73,11 +73,25 @@ async function scanThis() {
 }
 
 onMounted(() => {
-  // 直接进入详情页时若还没扫过，自动扫一次，让概览的数字有意义
-  if (manager.value?.detected && !scanned.value && !store.scanning) {
+  // 只在「没数据」或「数据已过期」时才自动扫，避免每次点开都要重新加载几秒
+  if (manager.value?.detected && !store.isFresh(manager.value.id) && !store.scanning) {
     void scanThis()
   }
 })
+
+/**
+ * 切换管理器时重新判断是否需要扫描。
+ * 组件在切换管理器时不会重新挂载，因此必须监听 activeManager，
+ * 否则从一个管理器切到另一个时不会触发加载。
+ */
+watch(
+  () => store.activeManager,
+  (id) => {
+    if (!id || !store.activeManagerInfo?.detected) return
+    if (store.isFresh(id) || store.scanning) return
+    void scanThis()
+  },
+)
 </script>
 
 <template>

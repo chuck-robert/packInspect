@@ -286,5 +286,8 @@
     "browse.alreadyInstalled":  "本机已安装",
     "browse.reinstall":  "重新安装",
     "browse.reinstallHint":  "本机已安装该包，点此生成重装命令",
-    "browse.emptyHint":  "换个关键词试试；若该生态不支持关键词搜索，请输入完整的包名。"
+    "browse.emptyHint":  "换个关键词试试；若该生态不支持关键词搜索，请输入完整的包名。",
+    "status.finishing":  "正在收尾…",
+    "packages.loading":  "正在读取该管理器的包…",
+    "packages.loadingHint":  "列表会在每个管理器扫描完成后立即出现，无需等待全部扫完。"
 }

@@ -62,6 +62,14 @@ interface State {
     /** 失败的管理器 → 原因 */
     failed: Record<string, string>
   }
+  /**
+   * 每个管理器最后一次扫描的时间戳。
+   *
+   * 用途：进入管理器详情页时判断「刚扫过就不必再扫」。
+   * 没有它的话每次打开都要重跑一遍命令（winget/pip 各要几秒），
+   * 用户会觉得「包还在重新加载」。
+   */
+  lastScannedAt: Record<string, number>
   loadingCandidates: boolean
   savingRegistry: boolean
 
@@ -108,6 +116,7 @@ export const useAppStore = defineStore('app', {
     detecting: false,
     scanning: false,
     scanProgress: { total: 0, completed: 0, current: null, failed: {} },
+    lastScannedAt: {},
     loadingCandidates: false,
     savingRegistry: false,
     view: 'manage',
@@ -290,15 +299,30 @@ export const useAppStore = defineStore('app', {
       this.view = 'manager'
       this.keyword = ''
       this.onlyRedundant = false
-      // 浏览结果属于上一个管理器，切换时清空
+      this.resetBrowse()
+    },
+
+    /**
+     * 清空在线浏览的状态。
+     *
+     * 关键：提示语（hint）与说明（note）都必须一起清 —— 它们描述的是
+     * **上一个生态**的能力限制（例如「PyPI 只支持精确包名」），
+     * 若不清掉，切到别的包管理器后那条警告会一直挂着，看起来像当前管理器的限制。
+     */
+    resetBrowse() {
       this.remotePackages = []
       this.browseQuery = ''
       this.browseError = null
+      this.browseNote = null
+      this.browseHint = null
+      this.browseUnsupported = false
       this.installPlan = null
     },
 
     setManagerTab(tab: ManagerTab) {
       this.managerTab = tab
+      // 离开浏览分页时也清掉，避免下次回来看到上一次的提示与结果
+      if (tab !== 'browse') this.resetBrowse()
     },
 
     // ---------------------------------------------------------------- 在线浏览
@@ -529,10 +553,22 @@ export const useAppStore = defineStore('app', {
       this.error = null
       this.scanProgress = { total: targets.length, completed: 0, current: null, failed: {} }
 
-      // 重置这一轮的包与缓存，但保留管理器探测结果
-      const collectedPackages: PackageRecord[] = []
-      const collectedCaches: CacheStats[] = []
-      this.caches = []
+      /*
+       * 关键：把**本次不扫**的管理器的已有数据先放进来。
+       *
+       * 之前这里是空的，于是单扫一个管理器时 `rebuildReport()` 会把其它管理器的
+       * 包与缓存整段丢掉 —— 表现就是「打开某个包管理器后，别的包里搜不到东西了，
+       * 必须重新全量扫描才恢复」。数据集是「所有管理器的并集」，
+       * 因此每次重建都必须保留未参与本次扫描的部分。
+       */
+      const collectedPackages: PackageRecord[] = (this.report?.packages ?? []).filter(
+        (p) => !targets.includes(p.manager),
+      )
+      const collectedCaches: CacheStats[] = (this.report?.caches ?? []).filter(
+        (c) => !targets.includes(c.managerId),
+      )
+      this.caches = [...collectedCaches]
+      // 扫描结果与旧候选不再对应，强制重置两阶段状态
       this.candidates = []
       this.cleanPhase = 'idle'
       this.previewResults = []
@@ -541,16 +577,25 @@ export const useAppStore = defineStore('app', {
       const startedAt = performance.now()
       const measure = options.measureSize ?? false
 
-      /** 把已收集到的内容组装成 report（每扫完一个管理器就重建一次） */
+      /**
+       * 把已收集到的内容组装成 report（每扫完一个管理器就重建一次）。
+       *
+       * 注意 `managers` 用的是**并集**：既要保留未参与本次扫描的管理器，
+       * 也要包含本次扫到的。只写 `targets` 会让管理器列表随扫描范围缩水。
+       */
       const rebuildReport = () => {
         const sorted = [...collectedPackages].sort(
           (a, b) => a.manager.localeCompare(b.manager) || a.name.localeCompare(b.name),
         )
+        const covered = new Set([
+          ...targets,
+          ...sorted.map((p) => p.manager),
+        ])
         this.report = {
           generatedAt: new Date().toISOString(),
           hostname: this.report?.hostname ?? null,
           os: this.report?.os ?? '',
-          managers: this.managers.filter((m) => targets.includes(m.id)),
+          managers: this.managers.filter((m) => covered.has(m.id)),
           packages: sorted,
           caches: [...collectedCaches],
           totalPackages: sorted.length,
@@ -567,6 +612,8 @@ export const useAppStore = defineStore('app', {
             if (result.ok) {
               collectedPackages.push(...result.packages)
               if (result.cache) collectedCaches.push(result.cache)
+              // 记录时效，避免下次打开该管理器时重复扫描
+              this.lastScannedAt[managerId] = Date.now()
             } else if (result.reason) {
               this.scanProgress.failed[managerId] = result.reason
             }
@@ -607,6 +654,19 @@ export const useAppStore = defineStore('app', {
     /** 某个包是否已经扫过（用于管理页按钮状态） */
     hasScanned(managerId: string): boolean {
       return (this.report?.packages ?? []).some((p) => p.manager === managerId)
+    },
+
+    /**
+     * 该管理器的数据是否还算新鲜（默认 5 分钟内）。
+     *
+     * 进入详情页时用它决定要不要自动重扫 —— 刚扫过就不要再跑一遍命令，
+     * 否则每次点开包管理器都要等几秒，用户会以为「包还在重新加载」。
+     * 状态栏那个数字现在是**总包数**，不受此影响。
+     */
+    isFresh(managerId: string, maxAgeMs = 5 * 60 * 1000): boolean {
+      const at = this.lastScannedAt[managerId]
+      if (!at) return false
+      return Date.now() - at < maxAgeMs
     },
 
     /** 只刷新当前管理器的缓存统计（比整轮扫描快得多） */
