@@ -282,5 +282,8 @@
     "banner.detectWarn":  "Detection notes",
     "error.title":  "Something went wrong",
     "error.retry":  "Retry",
-    "about.placeholder":  "(placeholder in phase 1)"
+    "about.placeholder":  "(placeholder in phase 1)",
+    "browse.alreadyInstalled":  "already installed",
+    "browse.reinstall":  "Reinstall",
+    "browse.reinstallHint":  "Already installed locally; click to build a reinstall command"
 }

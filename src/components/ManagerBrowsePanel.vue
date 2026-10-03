@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 浏览 / 安装新包（管理器详情页的「浏览 / 安装」分页）。
  *
@@ -12,7 +12,7 @@ import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
 import type { ManagerInfo, RemotePackage } from '@/types'
-import { formatCount } from '@/utils/format'
+import { formatCount, matchesKeyword } from '@/utils/format'
 
 const props = defineProps<{ manager: ManagerInfo }>()
 
@@ -33,6 +33,26 @@ async function run() {
 /** 点某个结果 → 生成安装方案（只给命令） */
 async function choose(item: RemotePackage) {
   await store.planInstall(item.name)
+}
+
+/** 本机已安装的包（按当前管理器过滤一次，供下面的查表用） */
+const installed = computed(() =>
+  (store.report?.packages ?? []).filter((record) => record.manager === props.manager.id),
+)
+
+/**
+ * 该包在本机是否已经安装？返回已安装版本，未安装返回 null。
+ *
+ * 为什么需要：用户常在这里搜一个**其实已经装过**的包，然后以为「搜不到」——
+ * 在线浏览只查仓库、不查本机，必须显式提示，否则这就是个体验坑。
+ * 匹配复用全局搜索的宽容规则（忽略空格/连字符/点），
+ * 因此仓库里的 `JanDeDobbeleer.OhMyPosh` 能对上本机记录的包名。
+ */
+function installedVersion(item: RemotePackage): string | null {
+  const hit = installed.value.find(
+    (record) => matchesKeyword([record.name, record.description], item.name),
+  )
+  return hit ? hit.version ?? '' : null
 }
 
 async function copyCommand(command: string) {
@@ -111,6 +131,10 @@ function planFor(item: RemotePackage): string {
                 <span v-if="item.downloads" class="tag">
                   {{ t('browse.downloads') }} {{ formatCount(item.downloads) }}
                 </span>
+                <span v-if="installedVersion(item) !== null" class="tag tag--ok">
+                  {{ t('browse.alreadyInstalled') }}
+                  <template v-if="installedVersion(item)"> {{ installedVersion(item) }}</template>
+                </span>
               </div>
               <div v-if="item.description" class="remote-item__desc">{{ item.description }}</div>
               <code class="remote-item__cmd">{{ planFor(item) }}</code>
@@ -126,8 +150,13 @@ function planFor(item: RemotePackage): string {
               <button class="btn btn--sm" @click="copyCommand(planFor(item))">
                 {{ copied === planFor(item) ? '✓' : t('browse.copy') }}
               </button>
-              <button class="btn btn--primary btn--sm" @click="choose(item)">
-                {{ t('browse.install') }}
+              <button
+                class="btn btn--sm"
+                :class="installedVersion(item) === null ? 'btn--primary' : ''"
+                :title="installedVersion(item) !== null ? t('browse.reinstallHint') : ''"
+                @click="choose(item)"
+              >
+                {{ installedVersion(item) !== null ? t('browse.reinstall') : t('browse.install') }}
               </button>
             </div>
           </li>

@@ -282,5 +282,8 @@
     "banner.detectWarn":  "探测提示",
     "error.title":  "出错了",
     "error.retry":  "重试",
-    "about.placeholder":  "（一期为占位按钮）"
+    "about.placeholder":  "（一期为占位按钮）",
+    "browse.alreadyInstalled":  "本机已安装",
+    "browse.reinstall":  "重新安装",
+    "browse.reinstallHint":  "本机已安装该包，点此生成重装命令"
 }
