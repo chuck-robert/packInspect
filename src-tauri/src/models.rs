@@ -1,4 +1,4 @@
-//! 后端 ↔ 前端共享数据结构。
+﻿//! 后端 ↔ 前端共享数据结构。
 //!
 //! 约定：Rust 侧全部 `rename_all = "camelCase"`，与 `src/types/index.ts` 一一对应，
 //! 任何字段改动必须同步修改 TS 定义，否则前端类型检查会失败（这是刻意的，用来防漂移）。
@@ -352,6 +352,8 @@ pub struct PackageOpResult {
     pub stderr: String,
     pub message: Option<String>,
     pub duration_ms: u64,
+    /// 执行日志的落盘位置（可见命令行窗口里同样能看到完整输出）
+    pub log_path: Option<String>,
 }
 
 /// 单个管理器的扫描结果。

@@ -292,5 +292,7 @@
     "packages.loadingHint":  "列表会在每个管理器扫描完成后立即出现，无需等待全部扫完。",
     "packages.matchContext":  "关键字「{keyword}」· 管理器 {manager} · 该管理器共 {total} 个包",
     "browse.execute":  "执行安装",
-    "browse.executeHint":  "可以直接执行安装，也可以复制命令自行运行。执行前会再弹一次确认，并显示将运行的确切命令。"
+    "browse.executeHint":  "可以直接执行安装，也可以复制命令自行运行。执行前会再弹一次确认，并显示将运行的确切命令。",
+    "ops.logPath":  "执行日志",
+    "ops.consoleNote":  "执行时会打开一个命令行窗口，你可以实时看到下载与安装进度；窗口 5 秒后自动关闭，完整输出也会保存在下面的日志文件里。"
 }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 后端数据结构镜像。
  *
  * ⚠️ 与 `src-tauri/src/models.rs` 一一对应（Rust 侧 `rename_all = "camelCase"`）。
@@ -300,6 +300,8 @@ export interface PackageOpResult {
   stderr: string
   message: string | null
   durationMs: number
+  /** 执行日志的落盘位置 */
+  logPath: string | null
 }
 
 /** 全局搜索命中的一条结果 */

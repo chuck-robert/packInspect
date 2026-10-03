@@ -292,5 +292,7 @@
     "packages.loadingHint":  "Results appear as soon as each manager finishes; you do not need to wait for all of them.",
     "packages.matchContext":  "keyword \"{keyword}\" · manager {manager} · {total} packages in this manager",
     "browse.execute":  "Install now",
-    "browse.executeHint":  "You can install directly or copy the command. A confirmation shows the exact command before anything runs."
+    "browse.executeHint":  "You can install directly or copy the command. A confirmation shows the exact command before anything runs.",
+    "ops.logPath":  "Log file",
+    "ops.consoleNote":  "A console window opens so you can watch download and install progress live. It closes after 5 seconds; the full output is also saved to the log file shown below."
 }

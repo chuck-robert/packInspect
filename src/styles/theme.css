@@ -1405,6 +1405,24 @@ table.data tbody tr.is-selected td {
   word-break: break-all;
   user-select: text;
 }
+.ops-log {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--bg-base);
+}
+.ops-log code {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-all;
+  user-select: text;
+}
+
 .ops-output .diff {
   max-height: 200px;
   margin-top: 4px;

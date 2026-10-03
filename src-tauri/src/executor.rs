@@ -1,4 +1,4 @@
-//! 命令解析与安全执行器。
+﻿//! 命令解析与安全执行器。
 //!
 //! 规则：
 //! 1. 只执行 `whitelist::op_args` 返回的静态参数，**不接受任何拼接的命令行**。
@@ -405,7 +405,7 @@ fn clean_output(s: &str) -> String {
     stripped.replace("\r\n", "\n").trim_start_matches('\u{feff}').to_string()
 }
 
-fn strip_ansi(s: &str) -> String {
+pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {

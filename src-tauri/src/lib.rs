@@ -1,4 +1,4 @@
-//! PackInspect 库入口。
+﻿//! PackInspect 库入口。
 //!
 //! 分层（依赖方向自上而下，下层不反向依赖上层）：
 //! ```text
@@ -17,6 +17,7 @@ pub mod actions;
 pub mod browse;
 pub mod cleaner;
 pub mod commands;
+pub mod console;
 pub mod error;
 pub mod executor;
 pub mod fsutil;

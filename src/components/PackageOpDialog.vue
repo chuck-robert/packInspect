@@ -95,6 +95,16 @@ async function run() {
   }
 }
 
+async function copyLogPath() {
+  if (!result.value?.logPath) return
+  try {
+    await navigator.clipboard.writeText(result.value.logPath)
+    store.notify('info', t('browse.copied'))
+  } catch {
+    store.notify('warn', t('browse.copyFailed'))
+  }
+}
+
 async function copyCommand() {
   try {
     await navigator.clipboard.writeText(command.value)
@@ -151,7 +161,7 @@ async function copyCommand() {
             <input v-model="acknowledged" type="checkbox" />
             <span>{{ t('ops.acknowledge') }}</span>
           </label>
-          <p class="hint" style="margin: 0">{{ t('ops.safetyNote') }}</p>
+          <p class="hint" style="margin: 0">{{ t('ops.consoleNote') }}</p>
         </template>
 
         <!-- 已执行：结果 -->
@@ -174,6 +184,13 @@ async function copyCommand() {
             <pre class="diff danger-text">{{ result.stderr }}</pre>
           </div>
           <p class="hint" style="margin: 0">{{ t('ops.refreshHint') }}</p>
+
+          <!-- 日志路径：命令行窗口里的完整输出也在这里，方便事后回看 -->
+          <div v-if="result.logPath" class="ops-log">
+            <span class="hint">{{ t('ops.logPath') }}</span>
+            <code class="mono">{{ result.logPath }}</code>
+            <button class="btn btn--sm" @click="copyLogPath">{{ t('browse.copy') }}</button>
+          </div>
         </template>
       </div>
 

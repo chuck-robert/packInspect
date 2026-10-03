@@ -1,4 +1,4 @@
-//! 真实包管理操作的执行层。
+﻿//! 真实包管理操作的执行层。
 //!
 //! 【本项目唯一会改动用户环境的模块】
 //!
@@ -15,8 +15,9 @@
 //!
 //! 执行时：不经过 shell（`executor` 统一处理 Windows 的 .cmd 包装），带强制超时。
 
+use crate::console;
 use crate::error::{AppError, AppResult};
-use crate::executor::{self, ExecRequest};
+use crate::executor;
 use crate::models::PackageOpResult;
 use crate::validate::PackageOp;
 use crate::whitelist;
@@ -68,6 +69,11 @@ fn display_command(manager: &str, args: &[String]) -> String {
 }
 
 /// 执行一个包管理操作
+///
+/// **在可见的命令行窗口里执行**（见 `console` 模块）：
+/// 安装过程有下载进度、依赖解析与报错，用户需要实时看到；
+/// 只给一个转圈图标然后突然弹结果，卡住时完全无法判断发生了什么。
+/// 同时把输出 tee 一份到日志，执行完由界面回显并给出日志路径。
 pub fn run(
     manager: &str,
     package: &str,
@@ -81,23 +87,29 @@ pub fn run(
         .ok_or_else(|| AppError::not_installed(manager))?;
 
     let args = render_args(template, package)?;
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let timeout = timeout_for(op);
+    let log_path = log_path_for(manager, package, op);
 
-    let request = ExecRequest::new(exe.to_string_lossy().to_string(), &arg_refs)
-        .with_timeout_ms(timeout_for(op).as_millis() as u64);
+    // 故意**不等待按键**（pause=false）：
+    // 否则后台的等待线程会一直挂到这个窗口被关闭为止，一旦用户走开就会撞上超时并被误判为失败。
+    // 命令行的完整输出已经落进日志，界面会给出日志路径，用户随时可以回看。
+    let outcome = console::run_visible(&exe, &args, &log_path, timeout, false)?;
 
-    let outcome = executor::run_resolved(&exe, &request)?;
-
-    // 命令输出可能很长（cargo 编译日志），截断后再回传，避免撑爆 IPC
-    let stdout = truncate(&outcome.stdout, 8_000);
-    let stderr = truncate(&outcome.stderr, 8_000);
+    // 输出可能很长（cargo 编译日志），console 模块已按字符边界截断。
+    // 先取出失败提示，再移动 stdout（否则会 borrow-after-move）
+    let failure_hint = outcome.failure_hint();
+    let stdout = outcome.stdout;
+    let stderr = outcome.stderr;
 
     let message = if outcome.timed_out {
-        Some(format!("执行超时（{}秒），操作可能仍在后台进行", timeout_for(op).as_secs()))
+        Some(format!(
+            "执行超时（{}秒）已被终止，日志可能不完整；请查看命令行窗口或日志文件",
+            timeout.as_secs()
+        ))
     } else if outcome.success {
         Some(format!("{package} {} 完成", op.as_str()))
     } else {
-        Some(format!("命令失败：{}", outcome.failure_hint()))
+        Some(format!("命令失败：{failure_hint}"))
     };
 
     Ok(PackageOpResult {
@@ -112,17 +124,32 @@ pub fn run(
         stderr,
         message,
         duration_ms: outcome.duration_ms,
+        log_path: Some(log_path.to_string_lossy().to_string()),
     })
 }
 
-/// 按字符边界截断（避免切断多字节字符产生乱码）
-fn truncate(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max_chars).collect();
-    format!("{head}\n… （输出已截断）")
+/// 操作日志的存放位置：`%APPDATA%\PackInspect\logs\<管理器>-<操作>-<包名>.log`
+///
+/// 放在 APPDATA 而不是程序目录：程序可能装在只读位置，而日志要能随时写。
+/// 文件名里的包名已过 `validate::package_name`（无 shell 元字符，也无路径分隔符），
+/// 因此不会出现路径穿越。
+fn log_path_for(manager: &str, package: &str, op: PackageOp) -> std::path::PathBuf {
+    // settings_path 返回 Result<PathBuf>，取不到时退回临时目录（日志仍要能写）
+    let base = crate::settings::settings_path()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // 包名里的 @ / + 之类保留，但把可能造成歧义的字符替换掉
+    let safe: String = package
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    dir.join(format!("{manager}-{}-{safe}.log", op.as_str()))
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -163,7 +190,17 @@ mod tests {
         let installed = run("npm", PKG, PackageOp::Install, template).expect("执行不应 panic");
         println!("[install] success={} exit={:?}", installed.success, installed.exit_code);
         println!("[install] command={}", installed.command);
-        println!("[install] stdout={}", installed.stdout.chars().take(400).collect::<String>());
+        println!(
+            "[install] stdout({} 字符): {}",
+            installed.stdout.trim().chars().count(),
+            installed.stdout.trim()
+        );
+        // 输出必须真的被回传到结果里（用于界面回显），不能是空字符串
+        assert!(
+            !installed.stdout.trim().is_empty(),
+            "安装输出应回传到结果中，供界面回显"
+        );
+        assert!(installed.log_path.as_deref().is_some_and(|p| p.ends_with(".log")));
         assert!(installed.success, "安装应成功：{}", installed.stderr);
         assert_eq!(installed.action, "install");
         assert_eq!(installed.package, PKG);
@@ -250,13 +287,18 @@ mod tests {
         assert!(shown.contains("\"Install-Module -Name Pester -Force\""), "{shown}");
     }
 
+    /// 日志路径必须落在 APPDATA 下的 logs 目录，且不能因包名而产生路径穿越
     #[test]
-    fn truncate_respects_char_boundaries() {
-        let text = "中文中文中文";
-        let cut = truncate(text, 3);
-        assert!(cut.starts_with("中文中"));
-        assert!(cut.contains("已截断"));
-        // 未超长时原样返回
-        assert_eq!(truncate("short", 100), "short");
+    fn log_path_is_safe_for_odd_package_names() {
+        let path = log_path_for("npm", "@scope/pkg", PackageOp::Install);
+        let text = path.to_string_lossy().to_string();
+        assert!(text.contains("logs"), "应放进 logs 目录: {text}");
+        assert!(text.ends_with(".log"));
+        assert!(text.contains("npm-install-"), "{text}");
+        // 作用域包名里的 / 必须被替换，不能形成子目录
+        assert!(!text.contains("scope/") && !text.contains("scope\\"), "不得产生子目录: {text}");
+
+        let uninstall = log_path_for("pip", "requests", PackageOp::Uninstall);
+        assert!(uninstall.to_string_lossy().contains("pip-uninstall-requests.log"));
     }
 }
