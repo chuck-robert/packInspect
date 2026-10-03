@@ -1,4 +1,4 @@
-﻿/* =========================================================================
+/* =========================================================================
    PackInspect 主题 —— 深色优先，可切换浅色
    所有颜色集中在 :root[data-theme=...]，改主题只需替换这一层变量。
    约束：无外部字体、无图片资源（图标由后端生成 data URI）。
@@ -670,6 +670,13 @@ pre,
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-muted);
+  /* 窄侧栏里长版本号（如 5.1.26100.9444）不应把包名挤没 */
+  flex: none;
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }
 
 .nav__divider {

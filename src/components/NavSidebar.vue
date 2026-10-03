@@ -9,8 +9,9 @@
 import { computed } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import type { ViewKey } from '@/types'
+import type { ManagerInfo, ViewKey } from '@/types'
 import ManagerLogo from '@/components/ManagerLogo.vue'
+import { shortVersion } from '@/utils/format'
 
 const store = useAppStore()
 const { t } = useI18n()
@@ -35,6 +36,12 @@ const installedCount = computed(() => store.installed.length)
 function isManagerActive(id: string) {
   return store.view === 'manager' && store.activeManager === id
 }
+
+/** 侧边栏只显示版本号本身；探测不到时显示占位符 */
+function versionLabel(manager: ManagerInfo): string {
+  if (!manager.detected) return '—'
+  return shortVersion(manager.version, manager.id) || '?'
+}
 </script>
 
 <template>
@@ -55,18 +62,12 @@ function isManagerActive(id: string) {
             'is-active': isManagerActive(manager.id),
             'is-missing': !manager.detected,
           }"
-          :title="
-            manager.detected
-              ? `${manager.version ?? ''}\n${manager.exePath ?? ''}`
-              : t('nav.notInstalled')
-          "
+          :title="manager.detected ? `${manager.name} ${versionLabel(manager)}` : t('nav.notInstalled')"
           @click="store.openManager(manager.id)"
         >
           <ManagerLogo :manager-id="manager.id" :name="manager.name" size="sm" />
           <span class="nav__label">{{ manager.name }}</span>
-          <span class="nav__version">
-            {{ manager.version ? manager.version.split(/[\s(]/)[0] : manager.detected ? '?' : '—' }}
-          </span>
+          <span class="nav__version">{{ versionLabel(manager) }}</span>
         </button>
 
         <div v-if="store.booting" class="hint" style="padding: 12px 8px">{{ t('nav.loading') }}</div>

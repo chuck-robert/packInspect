@@ -89,3 +89,41 @@ export function debounce<T extends (...args: never[]) => void>(fn: T, wait = 200
     timer = setTimeout(() => fn(...args), wait)
   }
 }
+
+/**
+ * 从管理器的 `--version` 输出里只取出版本号。
+ *
+ * 各管理器的输出格式并不统一，实测样本：
+ *   `11.13.0`                                   → 11.13.0
+ *   `cargo 1.99.0 (5f94df478 2026-08-27)`       → 1.99.0
+ *   `pip 26.1.2 from C:\...\site-packages\pip`  → 26.1.2
+ *   `Apache Maven 3.9.16 (2bdd9fdda 2025-...)`  → 3.9.16
+ *   `v1.29.380`                                 → 1.29.380
+ *   `5.1.26100.9444`                            → 5.1.26100.9444
+ *
+ * 侧边栏空间有限，只显示版本号本身，不显示构建哈希、日期或路径。
+ */
+export function shortVersion(rawVersion: string | null | undefined, managerId = ''): string {
+  const raw = (rawVersion ?? '').trim()
+  if (!raw) return ''
+
+  // 1) 去掉开头的管理器名，如 "cargo 1.99.0" → "1.99.0"
+  let rest = raw
+  if (managerId) {
+    const prefix = `${managerId} `
+    if (rest.toLowerCase().startsWith(prefix.toLowerCase())) {
+      rest = rest.slice(prefix.length).trim()
+    }
+  }
+  // 2) 去掉其它常见前缀词
+  rest = rest.replace(/^(Apache\s+)?Maven\s+/i, '')
+
+  // 3) 第一个 token 就是版本号时直接用
+  const token = rest.split(/\s+/)[0] ?? ''
+  if (/^v?\d+(\.\d+)*([-+][\w.]+)?$/.test(token)) {
+    return token.replace(/^v/, '')
+  }
+  // 4) 否则在整串里搜第一个版本号样式的片段
+  const found = rest.match(/v?(\d+(?:\.\d+){1,3}(?:[-+][\w.]+)?)/)
+  return found ? found[1] : ''
+}
