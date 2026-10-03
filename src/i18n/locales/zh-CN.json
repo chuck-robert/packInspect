@@ -290,5 +290,7 @@
     "status.finishing":  "正在收尾…",
     "packages.loading":  "正在读取该管理器的包…",
     "packages.loadingHint":  "列表会在每个管理器扫描完成后立即出现，无需等待全部扫完。",
-    "packages.matchContext":  "关键字「{keyword}」· 管理器 {manager} · 该管理器共 {total} 个包"
+    "packages.matchContext":  "关键字「{keyword}」· 管理器 {manager} · 该管理器共 {total} 个包",
+    "browse.execute":  "执行安装",
+    "browse.executeHint":  "可以直接执行安装，也可以复制命令自行运行。执行前会再弹一次确认，并显示将运行的确切命令。"
 }

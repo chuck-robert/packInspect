@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 浏览 / 安装新包（管理器详情页的「浏览 / 安装」分页）。
  *
@@ -11,8 +11,9 @@
 import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
-import type { ManagerInfo, RemotePackage } from '@/types'
+import type { ManagementAction, ManagerInfo, PackageRecord, RemotePackage } from '@/types'
 import { formatCount, matchesKeyword } from '@/utils/format'
+import PackageOpDialog from '@/components/PackageOpDialog.vue'
 
 const props = defineProps<{ manager: ManagerInfo }>()
 
@@ -30,9 +31,55 @@ async function run() {
   await store.browse(query.value)
 }
 
-/** 点某个结果 → 生成安装方案（只给命令） */
+/** 点某个结果 → 生成安装方案（含确切命令，真正执行要再经确认对话框） */
 async function choose(item: RemotePackage) {
   await store.planInstall(item.name)
+}
+
+/**
+ * 执行当前安装方案。
+ *
+ * 只看安装方案就执行是不安全的，因此这里把方案转成一条最小 `PackageRecord`
+ * 与一个 install 动作，交给 `PackageOpDialog` 走**同一个**确认流程 ——
+ * 与右键菜单的更新/卸载复用完全相同的后端入口与约束，不新增执行路径。
+ */
+const execOpen = ref(false)
+const execRecord = ref<PackageRecord | null>(null)
+const execAction = ref<ManagementAction | null>(null)
+
+function requestExecute() {
+  const current = plan.value
+  if (!current) return
+  execRecord.value = {
+    manager: current.managerId,
+    name: current.package,
+    version: null,
+    scope: 'global',
+    path: null,
+    size: null,
+    redundant: false,
+    redundantReason: null,
+    description: null,
+    latestVersion: null,
+    plugins: [],
+    pluginsLoaded: false,
+  }
+  execAction.value = {
+    action: 'install',
+    label: t('browse.install'),
+    online: true,
+    destructive: false,
+    enabled: true,
+    commandHint: current.command,
+    note: current.explanation,
+  }
+  execOpen.value = true
+}
+
+/** 执行结束后重扫该管理器，并清掉安装方案 */
+async function onExecuted() {
+  await store.scan({ managers: [props.manager.id], silent: true })
+  store.clearInstallPlan()
 }
 
 /** 本机已安装的包（按当前管理器过滤一次，供下面的查表用） */
@@ -97,14 +144,14 @@ function planFor(item: RemotePackage): string {
           </button>
         </div>
 
-        <div class="banner banner--info">{{ t('browse.noExecute') }}</div>
+        <div class="banner banner--info">{{ t('browse.executeHint') }}</div>
 
         <!-- 能力限制提示（例如 PyPI 只支持精确名查询）与失败原因：分开显示 -->
         <div v-if="store.browseHint" class="banner banner--warn">{{ store.browseHint }}</div>
         <div v-if="store.browseError" class="banner banner--error">{{ store.browseError }}</div>
         <div v-else-if="store.browseNote" class="banner banner--error">{{ store.browseNote }}</div>
 
-        <!-- 安装方案：只给命令 -->
+        <!-- 安装方案：可以复制，也可以直接执行（执行要再经确认对话框） -->
         <div v-if="plan" class="install-plan">
           <div class="install-plan__head">
             <span class="tag tag--accent">{{ t('browse.install') }}</span>
@@ -113,6 +160,9 @@ function planFor(item: RemotePackage): string {
             <span v-if="plan.requiresAdmin" class="tag tag--warn">{{ t('browse.adminRequired') }}</span>
             <button class="btn btn--sm" @click="copyCommand(plan.command)">
               {{ copied === plan.command ? '✓' : t('browse.copy') }}
+            </button>
+            <button class="btn btn--primary btn--sm" @click="requestExecute">
+              {{ t('browse.execute') }}
             </button>
             <button class="btn btn--ghost btn--sm" @click="store.clearInstallPlan()">✕</button>
           </div>
@@ -180,5 +230,13 @@ function planFor(item: RemotePackage): string {
         </ul>
       </div>
     </div>
+
+    <!-- 执行确认：与右键菜单的更新/卸载复用同一个对话框与后端入口 -->
+    <PackageOpDialog
+      v-model:open="execOpen"
+      :record="execRecord"
+      :action="execAction"
+      @done="onExecuted"
+    />
   </div>
 </template>

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 后端数据结构镜像。
  *
  * ⚠️ 与 `src-tauri/src/models.rs` 一一对应（Rust 侧 `rename_all = "camelCase"`）。
@@ -74,7 +74,13 @@ export interface ManagementAction {
   label: string
   online: boolean
   destructive: boolean
-  /** false = 一期占位按钮，不会真的执行 */
+  /**
+   * 是否可执行。
+   *
+   * true 表示白名单里确实注册了该操作模板，点击后会**真的改动你的环境**
+   * （走 `run_package_op`，带确认与超时）；
+   * false 表示该生态没有可靠做法，界面会说明原因而不是假装可用。
+   */
   enabled: boolean
   /** 等价官方命令，仅供参考 */
   commandHint: string | null

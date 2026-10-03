@@ -1,4 +1,4 @@
-//! 包管理动作描述。
+﻿//! 包管理动作描述。
 //!
 //! 【安全立场】PackInspect **不代替用户执行更新 / 卸载 / 安装**。
 //! 这类操作会改动用户真实环境，且包管理器自身的交互提示（确认、依赖冲突、权限）无法可靠地
@@ -81,7 +81,9 @@ pub fn actions_for(manager: &str, name: &str, scope: &str) -> Vec<ManagementActi
             action: "install".into(),
             label: "重新安装".into(),
             online: true,
-            destructive: true,
+            // 不是破坏性：安装/重装不会删除你的数据。但对话框仍会要求确认，
+            // 因为它确实会改动环境（见 PackageOpDialog 的 requiresAck）。
+            destructive: false,
             enabled: supported,
             command_hint: Some(cmd.clone()),
             note: Some(if supported {

@@ -290,5 +290,7 @@
     "status.finishing":  "Finishing…",
     "packages.loading":  "Reading packages for this manager…",
     "packages.loadingHint":  "Results appear as soon as each manager finishes; you do not need to wait for all of them.",
-    "packages.matchContext":  "keyword \"{keyword}\" · manager {manager} · {total} packages in this manager"
+    "packages.matchContext":  "keyword \"{keyword}\" · manager {manager} · {total} packages in this manager",
+    "browse.execute":  "Install now",
+    "browse.executeHint":  "You can install directly or copy the command. A confirmation shows the exact command before anything runs."
 }

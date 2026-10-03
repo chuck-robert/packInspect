@@ -1,4 +1,4 @@
-﻿//! 在包仓库里搜索「可安装的新包」。
+//! 在包仓库里搜索「可安装的新包」。
 //!
 //! 【安全与可用性取舍】
 //! - 只查询各生态**已知的搜索端点**，地址由本模块的模板拼接，不接受前端传入 URL；
@@ -629,11 +629,44 @@ pub fn install_plan(manager: &str, package: &str) -> AppResult<InstallPlan> {
         command,
         online: true,
         requires_admin,
-        explanation: format!(
-            "PackInspect 不会代替你执行安装。请复制上面的命令到终端运行 —— {manager} 的依赖解析、\
-             权限确认与交互提示无法在后台可靠完成，代为执行可能污染或破坏你的环境。"
-        ),
+        // 说明「这条命令做什么 / 有什么范围限制」，而不是「本工具不会执行」——
+        // 是否执行改由界面的确认对话框决定（走唯一的执行入口 run_package_op）。
+        explanation: scope_explanation(manager),
     })
+}
+
+/// 各生态安装命令的作用域与注意事项。
+///
+/// 这些差异会实际影响结果，必须写清楚，否则用户会以为「装了但没生效」：
+/// - dotnet 的 `add package` 只能作用于**当前项目**，无法全局安装
+/// - 全局安装与项目本地安装是两回事
+fn scope_explanation(manager: &str) -> String {
+    match manager {
+        "npm" | "pnpm" | "yarn" => {
+            format!("该命令把包装到 {manager} 的全局目录（等价于 -g），不写入任何项目的 node_modules。")
+        }
+        "pip" => "该命令装到当前 Python 环境的 site-packages；若使用虚拟环境，请注意当前激活的是哪一个。"
+            .to_string(),
+        "dotnet" => "注意：dotnet 的 add package 只能作用于当前项目（需要项目目录与 .csproj），\
+                     并非全局安装。请在终端里于目标项目目录下执行。"
+            .to_string(),
+        "composer" => "该命令装到 Composer 的全局目录（composer global require），与项目 composer.json 相互独立。"
+            .to_string(),
+        "gem" => "该命令装到 Ruby 的全局 gem 目录，与项目 Gemfile 相互独立。".to_string(),
+        "dart" => "该命令装到 pub 的全局目录（pub global），与项目 pubspec.yaml 相互独立。".to_string(),
+        "cargo" => "cargo install 会把可执行文件装到 ~/.cargo/bin，与项目的 Cargo.toml 无关。".to_string(),
+        "go" => "go install 会把可执行文件装到 GOBIN（默认 ~/go/bin），与任何 go.mod 无关。".to_string(),
+        "winget" | "scoop" | "chocolatey" => format!(
+            "该命令会系统级安装该软件（{manager}），通常需要管理员权限，且会影响整台机器。"
+        ),
+        "powershellget" => {
+            "该命令为当前用户安装 PowerShell 模块（-Scope CurrentUser），不影响其他用户。".to_string()
+        }
+        "luarocks" | "cpan" => {
+            format!("该命令按 {manager} 的默认作用域安装到本机，与项目本地依赖相互独立。")
+        }
+        _ => format!("该命令由 {manager} 执行，作用范围取决于该管理器的默认行为。"),
+    }
 }
 
 #[cfg(test)]
@@ -799,12 +832,28 @@ mod tests {
         assert!(parse_psgallery_xml("no entries here").is_empty());
     }
 
+    /// 安装方案本身只产出命令文本，不执行任何东西。
+    ///
+    /// 「能否执行」由界面确认后走**唯一**的执行入口 `package_ops::run`，
+    /// 那里有 confirm 校验、静态模板与超时；本函数不碰执行器。
     #[test]
-    fn install_plan_never_executes_and_warns_about_admin() {
+    fn install_plan_only_builds_a_command() {
         let plan = install_plan("winget", "Git.Git").unwrap();
         assert_eq!(plan.command, "winget install Git.Git");
-        assert!(plan.requires_admin);
-        assert!(plan.explanation.contains("不会代替你执行"));
+        assert!(plan.requires_admin, "winget 需要管理员权限");
+        assert!(plan.explanation.contains("管理员权限"), "应说明权限影响");
+
+        // 作用域差异必须写清楚，否则用户会以为「装了但没生效」
+        assert!(
+            install_plan("dotnet", "Newtonsoft.Json")
+                .unwrap()
+                .explanation
+                .contains("当前项目"),
+            "dotnet 的 add package 只能作用于当前项目，必须提示"
+        );
+        let npm = install_plan("npm", "vue").unwrap();
+        assert!(!npm.requires_admin, "npm 全局安装不需要管理员权限");
+        assert!(npm.explanation.contains("全局目录"));
 
         assert!(install_plan("npm", "vue; rm -rf /").is_err());
         assert!(install_plan("nope", "vue").is_err());

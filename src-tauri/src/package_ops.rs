@@ -127,12 +127,88 @@ fn truncate(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::validate;
 
     #[test]
     fn render_args_replaces_the_single_placeholder() {
         let template = &["update", "-g", "{}"];
         let args = render_args(template, "vue").unwrap();
         assert_eq!(args, vec!["update", "-g", "vue"]);
+    }
+
+    /// **真实执行的端到端验证**（会真的装包与卸包，因此默认忽略）。
+    ///
+    /// 为什么必须做这一步：模板正确 ≠ 命令能跑通。路径解析、参数顺序、
+    /// 退出码判断、输出回传都要在真实进程里才验证得到。
+    ///
+    /// 刻意选择**可逆且极小**的包，并在结束时卸载，不留副作用：
+    /// ```text
+    /// cargo test --lib npm_install_uninstall_round_trip -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "会真实安装/卸载 npm 包；用 --ignored 显式运行"]
+    fn npm_install_uninstall_round_trip() {
+        const PKG: &str = "is-number"; // 零依赖、极小、不会影响任何东西
+
+        // 前置：npm 必须可用，否则跳过（而不是失败）
+        let Some(exe) = executor::resolve_executable(&["npm.cmd", "npm.exe", "npm"]) else {
+            println!("跳过：未找到 npm");
+            return;
+        };
+        let _ = exe;
+
+        // ---- 1. 安装 ----
+        let template = validate::resolve_package_op("npm", PKG, PackageOp::Install)
+            .expect("npm install 应可用");
+        let installed = run("npm", PKG, PackageOp::Install, template).expect("执行不应 panic");
+        println!("[install] success={} exit={:?}", installed.success, installed.exit_code);
+        println!("[install] command={}", installed.command);
+        println!("[install] stdout={}", installed.stdout.chars().take(400).collect::<String>());
+        assert!(installed.success, "安装应成功：{}", installed.stderr);
+        assert_eq!(installed.action, "install");
+        assert_eq!(installed.package, PKG);
+        assert!(
+            installed.command.contains(PKG),
+            "回显命令里应包含包名：{}",
+            installed.command
+        );
+        assert!(installed.exit_code == Some(0), "退出码应为 0");
+        assert!(!installed.timed_out, "不应超时");
+
+        // ---- 2. 卸载（把环境还原）----
+        let template = validate::resolve_package_op("npm", PKG, PackageOp::Uninstall)
+            .expect("npm uninstall 应可用");
+        let removed = run("npm", PKG, PackageOp::Uninstall, template).expect("执行不应 panic");
+        println!("[uninstall] success={} exit={:?}", removed.success, removed.exit_code);
+        assert!(removed.success, "卸载应成功：{}", removed.stderr);
+        assert_eq!(removed.action, "uninstall");
+    }
+
+    /// 对不存在的包执行安装，应**失败但不 panic**，并把错误如实回传
+    #[test]
+    #[ignore = "需要网络；用 --ignored 显式运行"]
+    fn install_of_nonexistent_package_fails_gracefully() {
+        let template = validate::resolve_package_op(
+            "npm",
+            "this-package-definitely-does-not-exist-packinspect",
+            PackageOp::Install,
+        )
+        .expect("模板应存在");
+        let result = run(
+            "npm",
+            "this-package-definitely-does-not-exist-packinspect",
+            PackageOp::Install,
+            template,
+        )
+        .expect("即使失败也不应 panic");
+
+        println!("[missing] success={} message={:?}", result.success, result.message);
+        assert!(!result.success, "不存在的包不应安装成功");
+        assert!(result.exit_code.is_some(), "应有退出码");
+        assert!(
+            !result.stderr.is_empty() || !result.stdout.is_empty(),
+            "应回传输出供用户排查"
+        );
     }
 
     #[test]
@@ -146,7 +222,6 @@ mod tests {
     /// 包名在进入本模块前已被校验，但这里再确认一次「注入字符串不会静默通过」
     #[test]
     fn injection_package_names_are_rejected_upstream() {
-        use crate::validate;
         for bad in ["vue; rm -rf /", "$(id)", "`id`", "a b", "../../x"] {
             assert!(
                 validate::resolve_package_op("npm", bad, PackageOp::Install).is_err(),

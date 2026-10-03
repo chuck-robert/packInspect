@@ -1,12 +1,16 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
- * 包操作确认对话框（更新 / 卸载 / 安装）。
+ * 包管理操作确认对话框（更新 / 卸载 / 安装）。
  *
- * 这是本项目**唯一会改动用户环境**的入口，因此设计上刻意做重：
+ * 这是**唯一**会把用户环境改掉的入口，因此设计上刻意做重：
  * 1. 明确显示将执行的确切命令（来自后端白名单模板，不是前端拼的）
- * 2. 破坏性操作（卸载 / 重装）用红色警示，并要求勾选「我已了解后果」
+ * 2. 破坏性操作（安装 / 卸载都会改动环境）用红色警示，并要求勾选「我已了解后果」
  * 3. 执行阶段显示 spinner，禁止重复提交
  * 4. 结果完整回显 stdout / stderr 与退出码，失败时用户能自行复核
+ *
+ * 三种用法（都走同一个后端命令 `run_package_op`，因此约束完全一致）：
+ * - 右键已安装的包 → 更新 / 卸载 / 重装
+ * - 「浏览 / 安装」分页 → 安装新包
  */
 import { computed, ref, watch } from 'vue'
 import { useAppStore } from '@/stores/app'
@@ -16,7 +20,9 @@ import { formatDuration } from '@/utils/format'
 
 const props = defineProps<{
   open: boolean
+  /** 目标包；直接安装新包时用包名构造一条最小记录 */
   record: PackageRecord | null
+  /** 动作描述；不传时按 action 生成 */
   action: ManagementAction | null
 }>()
 
@@ -32,8 +38,16 @@ const copyState = ref<'idle' | 'ok' | 'fail'>('idle')
 
 const isDestructive = computed(() => props.action?.destructive ?? false)
 const command = computed(() => props.action?.commandHint ?? '')
-/** 破坏性操作必须先勾选确认 */
-const canRun = computed(() => !isDestructive.value || acknowledged.value)
+
+/**
+ * 是否必须勾选「我已了解后果」才能执行。
+ *
+ * 只有**卸载**要勾选 —— 它会真的把你的东西删掉。
+ * 安装与更新虽然也改动环境，但不会造成数据丢失，而且用户是主动点进来的，
+ * 对话框本身已经起到了确认作用；强行再要求勾选只会变成走过场。
+ */
+const requiresAck = computed(() => props.action?.action === 'uninstall')
+const canRun = computed(() => !requiresAck.value || acknowledged.value)
 
 const title = computed(() => {
   if (!props.action) return ''
@@ -106,9 +120,13 @@ async function copyCommand() {
         <!-- 目标包 -->
         <div class="kv">
           <span class="kv__k">{{ t('ops.package') }}</span>
-          <span class="kv__v">{{ record.name }} <span v-if="record.version">@{{ record.version }}</span></span>
-          <span v-if="record.description" class="kv__k">{{ t('detail.description') }}</span>
-          <span v-if="record.description" class="kv__v">{{ record.description }}</span>
+          <span class="kv__v">
+            {{ record.name }} <span v-if="record.version">@{{ record.version }}</span>
+          </span>
+          <template v-if="record.description">
+            <span class="kv__k">{{ t('detail.description') }}</span>
+            <span class="kv__v">{{ record.description }}</span>
+          </template>
         </div>
 
         <!-- 将执行的命令 -->
@@ -120,7 +138,7 @@ async function copyCommand() {
               {{ copyState === 'ok' ? '✓' : copyState === 'fail' ? '✗' : t('browse.copy') }}
             </button>
           </div>
-          <div class="hint" style="margin-top: 5px">{{ action.note }}</div>
+          <div v-if="action.note" class="hint" style="margin-top: 5px">{{ action.note }}</div>
         </div>
 
         <div v-if="isDestructive" class="banner banner--error">
@@ -129,7 +147,7 @@ async function copyCommand() {
 
         <!-- 未执行：确认区 -->
         <template v-if="!result">
-          <label v-if="isDestructive" class="checkbox" style="align-items: flex-start">
+          <label v-if="requiresAck" class="checkbox" style="align-items: flex-start">
             <input v-model="acknowledged" type="checkbox" />
             <span>{{ t('ops.acknowledge') }}</span>
           </label>
@@ -142,7 +160,8 @@ async function copyCommand() {
             <span>{{ result.message }}</span>
             <span class="banner__spacer" />
             <span class="mono">
-              {{ t('ops.exitCode') }} {{ result.exitCode ?? '—' }} · {{ formatDuration(result.durationMs) }}
+              {{ t('ops.exitCode') }} {{ result.exitCode ?? '—' }} ·
+              {{ formatDuration(result.durationMs) }}
             </span>
           </div>
 
@@ -165,7 +184,7 @@ async function copyCommand() {
         <button
           v-if="!result"
           class="btn"
-          :class="isDestructive ? 'btn--danger' : 'btn--primary'"
+          :class="requiresAck ? 'btn--danger' : 'btn--primary'"
           :disabled="!canRun || running"
           @click="run"
         >
