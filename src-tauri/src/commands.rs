@@ -1,4 +1,4 @@
-//! Tauri command 层：前端唯一的入口。
+﻿//! Tauri command 层：前端唯一的入口。
 //!
 //! 约定：
 //! - 所有命令都**不接收命令行字符串**，只接收结构化参数（manager id / 配置键 / 绝对路径）
@@ -23,9 +23,9 @@ use std::time::{Duration, Instant};
 /// 全局状态：缓存探测结果，避免每次扫描都重跑 `--version`
 #[derive(Default)]
 pub struct AppState {
-    cache: Mutex<Option<(Instant, Vec<ManagerInfo>)>>,
-    /// 图标缓存：同一 (manager, package) 只生成一次 SVG
-    icons: icons::IconCache,
+    cache: Mutex<Option<(Instant, String, Vec<ManagerInfo>)>>,
+    /// 包管理器 logo 缓存：按 (manager, theme) 只生成一次 SVG
+    logos: icons::LogoCache,
 }
 
 /// 探测结果缓存有效期。版本号在会话内基本不变，5 分钟足够。
@@ -38,29 +38,30 @@ impl AppState {
         }
     }
 
-    /// 带缓存的全量探测
-    pub fn detected_managers(&self, timeout_ms: u64) -> AppResult<Vec<ManagerInfo>> {
+    /// 带缓存的全量探测（主题参与缓存键，避免切主题后拿到旧配色）
+    pub fn detected_managers(&self, timeout_ms: u64, theme: icons::Theme) -> AppResult<Vec<ManagerInfo>> {
+        let cache_key = theme.as_str();
         if let Ok(guard) = self.cache.lock() {
-            if let Some((at, list)) = guard.as_ref() {
-                if at.elapsed() < DETECT_TTL {
+            if let Some((at, key, list)) = guard.as_ref() {
+                if at.elapsed() < DETECT_TTL && key == cache_key {
                     return Ok(list.clone());
                 }
             }
         }
-        let list = detect_all(timeout_ms)?;
+        let list = detect_all(timeout_ms, theme)?;
         if let Ok(mut guard) = self.cache.lock() {
-            *guard = Some((Instant::now(), list.clone()));
+            *guard = Some((Instant::now(), cache_key.to_string(), list.clone()));
         }
         Ok(list)
     }
 }
 
 /// 探测所有已知包管理器（单个失败不影响整体）
-fn detect_all(timeout_ms: u64) -> AppResult<Vec<ManagerInfo>> {
+fn detect_all(timeout_ms: u64, theme: icons::Theme) -> AppResult<Vec<ManagerInfo>> {
     let mut out = Vec::with_capacity(crate::whitelist::MANAGERS.len());
     for def in crate::whitelist::MANAGERS {
         // 探测阶段不读镜像源（改由独立命令按需加载，加快首屏）
-        match manager::detect(def.id, timeout_ms, false) {
+        match manager::detect(def.id, timeout_ms, false, theme) {
             Ok(info) => out.push(info),
             Err(e) => out.push(ManagerInfo {
                 id: def.id.to_string(),
@@ -74,6 +75,7 @@ fn detect_all(timeout_ms: u64) -> AppResult<Vec<ManagerInfo>> {
                 cache_dir: None,
                 config_file: None,
                 registry: None,
+                logo: Some(icons::manager_logo_svg(def.id, def.name, theme)),
                 download_url: Some(def.download_url.to_string()),
                 docs_url: Some(def.docs_url.to_string()),
                 warnings: vec![format!("探测失败: {}", e.message)],
@@ -95,8 +97,12 @@ where
 }
 
 /// 从 State 取出探测结果后立即释放 State 借用，便于后续 move 进闭包
-fn snapshot(state: &tauri::State<'_, AppState>, timeout_ms: u64) -> AppResult<Vec<ManagerInfo>> {
-    state.detected_managers(timeout_ms)
+fn snapshot(
+    state: &tauri::State<'_, AppState>,
+    timeout_ms: u64,
+    theme: icons::Theme,
+) -> AppResult<Vec<ManagerInfo>> {
+    state.detected_managers(timeout_ms, theme)
 }
 
 fn clamp_timeout(value: Option<u64>, default: u64) -> u64 {
@@ -124,18 +130,22 @@ pub fn supported_managers() -> Vec<serde_json::Value> {
 }
 
 /// 探测本机包管理器。`force = true` 时忽略缓存重新探测。
+///
+/// `theme` 决定管理器 logo 的配色变体（"dark" / "light"）。
 #[tauri::command]
 pub async fn detect_managers(
     state: tauri::State<'_, AppState>,
     force: Option<bool>,
     timeout_ms: Option<u64>,
+    theme: Option<String>,
 ) -> AppResult<Vec<ManagerInfo>> {
     let timeout = clamp_timeout(timeout_ms, 20_000);
+    let theme = icons::Theme::parse(theme.as_deref().unwrap_or("dark"));
     if force.unwrap_or(false) {
         state.invalidate();
-        return blocking(move || detect_all(timeout)).await;
+        return blocking(move || detect_all(timeout, theme)).await;
     }
-    let list = snapshot(&state, timeout)?;
+    let list = snapshot(&state, timeout, theme)?;
     Ok(list)
 }
 
@@ -152,9 +162,11 @@ pub async fn get_registry(manager_id: String, timeout_ms: Option<u64>) -> AppRes
 pub async fn get_all_registries(
     state: tauri::State<'_, AppState>,
     timeout_ms: Option<u64>,
+    theme: Option<String>,
 ) -> AppResult<HashMap<String, RegistryConfig>> {
     let timeout = clamp_timeout(timeout_ms, 20_000);
-    let detected = snapshot(&state, timeout)?;
+    let theme = icons::Theme::parse(theme.as_deref().unwrap_or("dark"));
+    let detected = snapshot(&state, timeout, theme)?;
     let ids: Vec<String> = detected.iter().filter(|m| m.detected).map(|m| m.id.clone()).collect();
     blocking(move || {
         let mut map = HashMap::new();
@@ -203,7 +215,7 @@ pub async fn run_scan(
     request: Option<ScanRequest>,
 ) -> AppResult<ScanReport> {
     let req = request.unwrap_or_default();
-    let detected = snapshot(&state, req.timeout_ms.clamp(1_000, 120_000))?;
+    let detected = snapshot(&state, req.timeout_ms.clamp(1_000, 120_000), icons::Theme::Dark)?;
     blocking(move || report::run_scan(&detected, &req)).await
 }
 
@@ -219,9 +231,11 @@ pub async fn get_cache_stats(manager_id: String) -> AppResult<CacheStats> {
 pub async fn list_clean_candidates(
     state: tauri::State<'_, AppState>,
     timeout_ms: Option<u64>,
+    theme: Option<String>,
 ) -> AppResult<Vec<CleanCandidate>> {
     let timeout = clamp_timeout(timeout_ms, 30_000);
-    let detected = snapshot(&state, timeout)?;
+    let theme = icons::Theme::parse(theme.as_deref().unwrap_or("dark"));
+    let detected = snapshot(&state, timeout, theme)?;
     blocking(move || report::collect_candidates(&detected, timeout)).await
 }
 
@@ -231,12 +245,14 @@ pub async fn clean_caches(
     state: tauri::State<'_, AppState>,
     request: CleanRequest,
     timeout_ms: Option<u64>,
+    theme: Option<String>,
 ) -> AppResult<Vec<CleanResult>> {
     let timeout = clamp_timeout(timeout_ms, 30_000);
+    let theme = icons::Theme::parse(theme.as_deref().unwrap_or("dark"));
     for id in &request.candidate_ids {
         validate::candidate_id(id)?;
     }
-    let detected = snapshot(&state, timeout)?;
+    let detected = snapshot(&state, timeout, theme)?;
     blocking(move || {
         let candidates = report::collect_candidates(&detected, timeout)?;
         crate::cleaner::run(&candidates, &request.candidate_ids, request.dry_run, timeout)
@@ -263,21 +279,57 @@ pub fn parent_dir(path: String) -> AppResult<String> {
 }
 
 // ---------------------------------------------------------------------------
-// 包图标 / 管理动作 / 包内子节点
+// 包管理器 logo / 在线浏览 / 安装方案 / 管理动作 / 包内子节点
 // ---------------------------------------------------------------------------
 
-/// 取单个包的图标（走全局缓存，重复调用零成本）
+/// 批量取包管理器品牌 logo（按主题，走缓存）。
+///
+/// 切换主题后前端调用一次即可拿到全部配色变体，不必重新探测。
 #[tauri::command]
-pub fn package_icon(state: tauri::State<'_, AppState>, manager_id: String, package: String) -> AppResult<IconResponse> {
-    packages::ensure_known(&manager_id)?;
-    validate::package_name(&package)?;
-    let before = state.icons.len();
-    let data_uri = state.icons.get_or_create(&manager_id, &package);
-    Ok(IconResponse {
-        key: format!("{manager_id}/{package}"),
-        data_uri,
-        cached: state.icons.len() == before,
+pub fn manager_logos(
+    state: tauri::State<'_, AppState>,
+    request: LogoRequest,
+) -> AppResult<Vec<LogoResponse>> {
+    let theme = icons::Theme::parse(&request.theme);
+    let targets: Vec<(&'static str, &'static str)> = if request.managers.is_empty() {
+        crate::whitelist::MANAGERS.iter().map(|m| (m.id, m.name)).collect()
+    } else {
+        let mut list = Vec::new();
+        for id in &request.managers {
+            let def = crate::whitelist::find(id)
+                .ok_or_else(|| AppError::invalid(format!("未知包管理器: {id}")))?;
+            list.push((def.id, def.name));
+        }
+        list
+    };
+
+    Ok(targets
+        .into_iter()
+        .map(|(id, name)| LogoResponse {
+            manager_id: id.to_string(),
+            data_uri: state.logos.get_or_create(id, name, theme),
+        })
+        .collect())
+}
+
+/// 在包仓库里搜索可安装的新包
+#[tauri::command]
+pub async fn browse_packages(request: BrowseRequest) -> AppResult<Vec<RemotePackage>> {
+    packages::ensure_known(&request.manager)?;
+    let timeout = clamp_timeout(request.timeout_ms, 20_000);
+    blocking(move || {
+        let mut req = request;
+        req.timeout_ms = Some(timeout);
+        crate::browse::browse(&req)
     })
+    .await
+}
+
+/// 生成安装方案（**只返回命令，不执行**）
+#[tauri::command]
+pub fn plan_install(manager_id: String, package: String) -> AppResult<InstallPlan> {
+    packages::ensure_known(&manager_id)?;
+    crate::browse::install_plan(&manager_id, &package)
 }
 
 /// 列出一个包支持的右键管理动作。
@@ -316,7 +368,7 @@ pub async fn package_plugins(
 /// 未检测到的包管理器 + 官方下载入口（满足「没有就提示去官网下载」）
 #[tauri::command]
 pub async fn install_hints(state: tauri::State<'_, AppState>) -> AppResult<Vec<InstallHint>> {
-    let detected = snapshot(&state, 20_000)?;
+    let detected = snapshot(&state, 20_000, icons::Theme::Dark)?;
     Ok(report::install_hints(&detected))
 }
 

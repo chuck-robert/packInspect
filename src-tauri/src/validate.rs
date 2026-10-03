@@ -12,7 +12,7 @@ fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+' | '@' | '/' | '~')
 }
 
-/// 校验包名。空串、含空白、含引号、含 shell 元字符一律拒绝。
+/// 校验用户输入的包名。空串、含空白、含引号、含 shell 元字符一律拒绝。
 pub fn package_name(name: &str) -> AppResult<&str> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -27,6 +27,33 @@ pub fn package_name(name: &str) -> AppResult<&str> {
     }
     if !trimmed.chars().all(is_name_char) {
         return Err(AppError::forbidden(format!("包名包含非法字符: {trimmed}")));
+    }
+    Ok(trimmed)
+}
+
+/// 校验在线搜索关键词。
+///
+/// 允许空格（多词搜索很常见），但禁止一切能改变 URL 结构、构成路径片段或注入 shell 的字符。
+/// 刻意**不允许 `/`**：包名里的 `/` 只出现在 npm 作用域前缀（`@scope/name`）与 Go module 路径中，
+/// 前者只需搜 `name` 即可命中，后者不在在线浏览支持范围内；
+/// 而放行 `/` 会让 `../../etc/passwd` 这类输入通过校验。
+pub fn search_query(query: &str) -> AppResult<&str> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::invalid("搜索关键词不能为空"));
+    }
+    if trimmed.chars().count() > 100 {
+        return Err(AppError::invalid("搜索关键词过长（上限 100 字符）"));
+    }
+    if trimmed.contains("..") {
+        return Err(AppError::forbidden("搜索关键词不能包含 .. 路径片段"));
+    }
+    let allowed = |c: char| {
+        c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '+' | '@' | ':' | '(' | ')')
+    };
+    if !trimmed.chars().all(allowed) {
+        let bad: String = trimmed.chars().filter(|c| !allowed(*c)).take(5).collect();
+        return Err(AppError::forbidden(format!("搜索关键词包含非法字符: {bad}")));
     }
     Ok(trimmed)
 }
@@ -241,6 +268,23 @@ mod tests {
         assert!(registry_url("https://registry.npmmirror.com").is_ok());
         assert!(registry_url("file:///etc/passwd").is_err());
         assert!(registry_url("https://a.com\ninjected=1").is_err());
+    }
+
+    #[test]
+    fn search_query_allows_spaces_but_blocks_injection() {
+        assert!(search_query("vue").is_ok());
+        assert!(search_query("vue router").is_ok());
+        assert!(search_query("@antfu").is_ok());
+        assert!(search_query("Newtonsoft.Json").is_ok());
+        assert!(search_query("org.slf4j:slf4j-api").is_ok());
+        for bad in [
+            "", "   ", "a;b", "a|b", "a&b", "a$(id)", "a`id`", "a\nb", "a>b", "a'b", "a\"b",
+            "../../etc/passwd", "a/b", "a\\b", "x?y", "x#y",
+        ] {
+            assert!(search_query(bad).is_err(), "{bad:?} 应被拒绝");
+        }
+        // 超长关键词
+        assert!(search_query(&"x".repeat(101)).is_err());
     }
 
     #[test]

@@ -1,18 +1,12 @@
 <script setup lang="ts">
 /**
- * 已安装包列表。
+ * 已安装包列表（按管理器过滤的独立视图入口）。
  *
- * 按要求只展示「包名 + 版本」两列（体积可选），路径等细节收进详情抽屉与右键菜单，
- * 让主列表保持扫读友好。
- *
- * 交互：
- * - 左键行 → 打开详情抽屉
- * - 右键行 → 打开管理菜单（含更新 / 卸载 / 安装占位按钮 + 包内插件入口）
- * - 右键空白 → 无操作（避免误触）
+ * 只展示「包名 + 版本」；路径等细节收进详情抽屉与右键菜单。
+ * 列表内不再显示包图标 —— 图标属于「包管理器」，已在侧边栏与卡片上体现。
  */
 import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
-import { useSettingsStore } from '@/stores/settings'
 import { useI18n } from '@/i18n'
 import type { PackageRecord } from '@/types'
 import PackageContextMenu from '@/components/PackageContextMenu.vue'
@@ -20,7 +14,6 @@ import PackageDetailDrawer from '@/components/PackageDetailDrawer.vue'
 import { formatBytesShort, formatCount } from '@/utils/format'
 
 const store = useAppStore()
-const settings = useSettingsStore()
 const { t } = useI18n()
 
 type SortKey = 'name' | 'version' | 'size'
@@ -47,6 +40,7 @@ const rows = computed(() => {
 })
 
 const redundantCount = computed(() => store.visiblePackages.filter((p) => p.redundant).length)
+const hasSize = computed(() => rows.value.some((r) => r.size !== null))
 
 function toggleSort(key: SortKey) {
   if (sortKey.value === key) sortAsc.value = !sortAsc.value
@@ -57,22 +51,16 @@ function toggleSort(key: SortKey) {
 }
 
 function sortIndicator(key: SortKey) {
-  if (sortKey.value !== key) return ''
-  return sortAsc.value ? ' ▲' : ' ▼'
+  return sortKey.value === key ? (sortAsc.value ? ' ▲' : ' ▼') : ''
 }
 
 function openMenu(record: PackageRecord, event: MouseEvent) {
   menuState.value = { record, x: event.clientX, y: event.clientY }
 }
-
-function openDetail(record: PackageRecord) {
-  detailTarget.value = record
-}
 </script>
 
 <template>
   <section class="scroll-area" style="padding: 12px 14px">
-    <!-- 过滤栏 -->
     <div class="row" style="margin-bottom: 10px">
       <input
         v-model="store.keyword"
@@ -89,12 +77,9 @@ function openDetail(record: PackageRecord) {
       </span>
       <span class="tag">{{ t('packages.count', { count: formatCount(rows.length) }) }}</span>
       <span class="banner__spacer" />
-      <span v-if="store.measuredBytes > 0" class="hint">
-        {{ formatBytesShort(store.measuredBytes) }}
-      </span>
+      <span v-if="store.measuredBytes > 0" class="hint">{{ formatBytesShort(store.measuredBytes) }}</span>
     </div>
 
-    <!-- 空态 -->
     <div v-if="!store.report" class="empty">
       <div class="empty__icon">📦</div>
       <div>{{ t('packages.emptyTitle') }}</div>
@@ -107,7 +92,6 @@ function openDetail(record: PackageRecord) {
       <div class="hint">{{ t('packages.noMatchHint') }}</div>
     </div>
 
-    <!-- 列表 -->
     <div v-else class="panel">
       <div class="table-wrap" style="max-height: calc(100vh - 250px)">
         <table class="data pkg-table">
@@ -116,12 +100,7 @@ function openDetail(record: PackageRecord) {
               <th class="is-sortable" @click="toggleSort('name')">
                 {{ t('packages.name') }} / {{ t('packages.version') }}{{ sortIndicator('name') }}
               </th>
-              <th
-                v-if="store.measuredBytes > 0"
-                class="is-sortable num"
-                style="width: 96px"
-                @click="toggleSort('size')"
-              >
+              <th v-if="hasSize" class="is-sortable num" style="width: 96px" @click="toggleSort('size')">
                 {{ t('packages.size') }}{{ sortIndicator('size') }}
               </th>
               <th style="width: 84px" />
@@ -134,29 +113,19 @@ function openDetail(record: PackageRecord) {
               :class="{ 'is-redundant': p.redundant }"
               @contextmenu.prevent="openMenu(p, $event)"
             >
-              <!-- 只展示「包名 + 版本」：版本紧跟包名，避免被挤出可视区 -->
               <td>
                 <div class="pkg-cell">
-                  <img
-                    v-if="settings.settings.showIcons && p.icon"
-                    class="pkg-icon"
-                    :src="p.icon"
-                    alt=""
-                    loading="lazy"
-                  />
-                  <span v-else class="pkg-icon pkg-icon--fallback">
-                    {{ p.name.replace(/^@[^/]+\//, '').charAt(0).toUpperCase() }}
-                  </span>
                   <span class="pkg-cell__name" :title="p.description ?? p.name">{{ p.name }}</span>
                   <span class="pkg-cell__version mono">{{ p.version ?? '—' }}</span>
+                  <span class="tag">{{ p.manager }}</span>
                   <span v-if="p.redundant" class="tag tag--warn">{{ t('packages.redundantMark') }}</span>
                 </div>
               </td>
-              <td v-if="store.measuredBytes > 0" class="num">
+              <td v-if="hasSize" class="num">
                 {{ p.size === null ? '—' : formatBytesShort(p.size) }}
               </td>
               <td>
-                <button class="btn btn--ghost btn--sm" @click="openDetail(p)">
+                <button class="btn btn--ghost btn--sm" @click="detailTarget = p">
                   {{ t('detail.title') }}
                 </button>
               </td>
@@ -176,8 +145,8 @@ function openDetail(record: PackageRecord) {
       :x="menuState.x"
       :y="menuState.y"
       @close="menuState = null"
-      @inspect="openDetail"
-      @manage="openDetail"
+      @inspect="detailTarget = $event"
+      @manage="detailTarget = $event"
     />
 
     <PackageDetailDrawer :record="detailTarget" @close="detailTarget = null" />

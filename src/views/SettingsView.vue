@@ -17,6 +17,19 @@ const { t } = useI18n()
 const diagnostics = ref<Record<string, unknown> | null>(null)
 const diagError = ref('')
 
+/** 版本号由 Vite 在构建时从 package.json 注入，避免手工维护两处 */
+const appVersion = __APP_VERSION__
+
+/**
+ * 打开「关于」里的外链。
+ *
+ * 走后端统一的 `open_external_link`（https + 域名白名单 + 由系统浏览器打开），
+ * 而不是 `window.open` —— 后者在 Tauri WebView 里不会真的打开外部浏览器。
+ */
+async function openAboutLink(url: string) {
+  await store.openUrl(url)
+}
+
 const LANGUAGES: { value: Locale; label: string }[] = [
   { value: 'zh-CN', label: '简体中文' },
   { value: 'en-US', label: 'English' },
@@ -48,7 +61,7 @@ function setTheme(theme: ThemeName) {
   dirty.value = true
 }
 
-function setToggle(key: 'scanOnStartup' | 'showIcons', value: boolean) {
+function setToggle(key: 'scanOnStartup', value: boolean) {
   settings.patch({ [key]: value })
   dirty.value = true
 }
@@ -131,20 +144,6 @@ async function save() {
             </label>
           </div>
 
-          <div class="setting-row">
-            <div class="setting-row__label">
-              <div>{{ t('settings.showIcons') }}</div>
-              <div class="hint">{{ t('settings.showIconsHint') }}</div>
-            </div>
-            <label class="switch">
-              <input
-                type="checkbox"
-                :checked="settings.settings.showIcons"
-                @change="setToggle('showIcons', ($event.target as HTMLInputElement).checked)"
-              />
-              <span class="switch__track"><span class="switch__thumb" /></span>
-            </label>
-          </div>
 
           <div class="row" style="justify-content: flex-end">
             <span v-if="settings.error" class="hint danger-text" style="margin-right: auto">
@@ -185,6 +184,56 @@ async function save() {
         </div>
         <div class="panel__body">
           <p class="hint" style="margin: 0">{{ t('settings.safetyBody') }}</p>
+        </div>
+      </div>
+
+      <!-- 关于 -->
+      <div class="panel">
+        <div class="panel__head">
+          <span class="panel__title">{{ t('about.title') }}</span>
+          <span class="panel__spacer" />
+          <span class="tag tag--accent">v{{ appVersion }}</span>
+        </div>
+        <div class="panel__body col">
+          <p class="hint" style="margin: 0">{{ t('about.projectNote') }}</p>
+
+          <div class="kv">
+            <span class="kv__k">{{ t('about.version') }}</span>
+            <span class="kv__v">{{ appVersion }}</span>
+
+            <span class="kv__k">{{ t('about.build') }}</span>
+            <span class="kv__v">Vue 3 · TypeScript · Vite · Tauri v2 (Rust)</span>
+
+            <span class="kv__k">{{ t('about.runtime') }}</span>
+            <span class="kv__v">
+              {{ diagnostics?.os ?? '—' }} / {{ diagnostics?.arch ?? '—' }}
+            </span>
+
+            <span class="kv__k">{{ t('about.home') }}</span>
+            <span class="kv__v">{{ diagnostics?.home ?? '—' }}</span>
+
+            <span class="kv__k">{{ t('settings.managers') }}</span>
+            <span class="kv__v">
+              {{ (diagnostics?.supportedManagers as string[] | undefined)?.join('、') ?? '—' }}
+            </span>
+          </div>
+
+          <div class="row" style="flex-wrap: wrap">
+            <button class="btn btn--sm" @click="openAboutLink('https://tauri.app/')">
+              Tauri
+            </button>
+            <button class="btn btn--sm" @click="openAboutLink('https://vuejs.org/')">
+              Vue
+            </button>
+            <button class="btn btn--sm" @click="openAboutLink('https://vite.dev/')">
+              Vite
+            </button>
+          </div>
+
+          <p class="hint" style="margin: 0">
+            安全说明：前端不具备执行 shell 与读取文件系统的能力；所有命令都由 Rust 侧按白名单执行，
+            参数为静态数组。清理只作用于已识别的缓存目录，且必须先经过 dry-run 预览与二次确认。
+          </p>
         </div>
       </div>
     </div>

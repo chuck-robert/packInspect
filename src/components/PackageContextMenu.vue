@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 包右键菜单。
  *
@@ -11,6 +11,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
 import type { ManagementAction, PackageRecord } from '@/types'
+import ManagerLogo from '@/components/ManagerLogo.vue'
 
 const props = defineProps<{
   record: PackageRecord
@@ -101,7 +102,7 @@ onBeforeUnmount(() => {
     <div class="ctx-menu" :style="position" @click.stop>
       <!-- 头部：包身份 -->
       <div class="ctx-head">
-        <img v-if="record.icon" class="pkg-icon pkg-icon--sm" :src="record.icon" alt="" />
+        <ManagerLogo :manager-id="record.manager" :name="record.manager" size="sm" />
         <div class="ctx-head__text">
           <div class="ctx-head__name">{{ record.name }}</div>
           <div class="ctx-head__meta mono">

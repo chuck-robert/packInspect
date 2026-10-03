@@ -1,8 +1,9 @@
-﻿//! 包管理器探测：定位可执行文件、版本、全局根目录、缓存目录、配置文件。
+//! 包管理器探测：定位可执行文件、版本、全局根目录、缓存目录、配置文件。
 
 use crate::error::AppResult;
 use crate::executor;
 use crate::fsutil;
+use crate::icons;
 use crate::models::ManagerInfo;
 use crate::packages;
 use crate::registry;
@@ -11,7 +12,14 @@ use crate::whitelist;
 use std::path::{Path, PathBuf};
 
 /// 探测单个包管理器。任何子步骤失败都降级为 warning，不影响整体返回。
-pub fn detect(id: &str, timeout_ms: u64, with_registry: bool) -> AppResult<ManagerInfo> {
+///
+/// `theme` 决定 logo 的配色变体；切换主题后前端可调用 `manager_logos` 重新获取。
+pub fn detect(
+    id: &str,
+    timeout_ms: u64,
+    with_registry: bool,
+    theme: icons::Theme,
+) -> AppResult<ManagerInfo> {
     let def = whitelist::find(id).ok_or_else(|| crate::error::AppError::invalid(format!("不支持: {id}")))?;
     let mut warnings: Vec<String> = Vec::new();
 
@@ -78,6 +86,7 @@ pub fn detect(id: &str, timeout_ms: u64, with_registry: bool) -> AppResult<Manag
         cache_dir: cache_dir.map(|p| p.to_string_lossy().to_string()),
         config_file,
         registry: registry_config,
+        logo: Some(icons::manager_logo_svg(def.id, def.name, theme)),
         download_url: Some(def.download_url.to_string()),
         docs_url: Some(def.docs_url.to_string()),
         warnings,

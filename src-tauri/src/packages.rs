@@ -10,7 +10,6 @@
 use crate::error::AppResult;
 use crate::executor::{self, ExecRequest};
 use crate::fsutil;
-use crate::icons;
 use crate::models::PackageRecord;
 use crate::whitelist;
 use serde_json::Value;
@@ -33,7 +32,6 @@ fn rec(
 ) -> PackageRecord {
     let name = name.into();
     PackageRecord {
-        icon: Some(icons::monogram_for(manager, &name)),
         name,
         version,
         manager: manager.to_string(),
@@ -44,6 +42,7 @@ fn rec(
         redundant_reason: None,
         description: None,
         latest_version: None,
+        // 图标只属于「包管理器」，不属于单个包，因此这里不再生成
         plugins: Vec::new(),
         plugins_loaded: false,
     }

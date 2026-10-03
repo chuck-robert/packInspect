@@ -11,20 +11,23 @@ import { invoke } from '@tauri-apps/api/core'
 import type {
   AppError,
   AppSettings,
+  BrowseRequest,
   CacheStats,
   CleanCandidate,
   CleanRequest,
   CleanResult,
   ExportRequest,
-  IconResponse,
   InstallHint,
+  InstallPlan,
   ManagementAction,
   ManagerInfo,
+  ManagerLogo,
   OpenLinkRequest,
   PackageRecord,
   PluginNode,
   PluginsRequest,
   RegistryConfig,
+  RemotePackage,
   ScanReport,
   ScanRequest,
 } from '@/types'
@@ -75,9 +78,9 @@ export const api = {
   /** 静态列表：不触发任何系统调用，用于首屏骨架 */
   supportedManagers: () => call<SupportedManager[]>('supported_managers'),
 
-  /** 探测本机包管理器；force = 忽略 5 分钟缓存 */
-  detectManagers: (force = false, timeoutMs?: number) =>
-    call<ManagerInfo[]>('detect_managers', { force, timeoutMs }),
+  /** 探测本机包管理器；force = 忽略 5 分钟缓存，theme 决定 logo 配色 */
+  detectManagers: (force = false, timeoutMs?: number, theme = 'dark') =>
+    call<ManagerInfo[]>('detect_managers', { force, timeoutMs, theme }),
 
   getRegistry: (managerId: string, timeoutMs?: number) =>
     call<RegistryConfig>('get_registry', { managerId, timeoutMs }),
@@ -118,11 +121,24 @@ export const api = {
   // ---------------------------------------------------------------- 包管理交互
 
   /**
-   * 取包图标。后端返回内联 SVG data URI（离线生成，按包名哈希配色），
-   * 同一 (manager, package) 在后端有缓存，重复调用零成本。
+   * 批量取包管理器的品牌 logo（内联 SVG，按主题配色，后端有缓存）。
+   * 切换主题后调用一次即可整体换色。
    */
-  packageIcon: (managerId: string, packageName: string) =>
-    call<IconResponse>('package_icon', { managerId, package: packageName }),
+  managerLogos: (theme: string, managers?: string[]) =>
+    call<ManagerLogo[]>('manager_logos', { request: { theme, managers } }),
+
+  /**
+   * 在包仓库里搜索可安装的新包。
+   * 只查询各生态的已知搜索 API；关键词经后端校验与编码。
+   */
+  browsePackages: (request: BrowseRequest) => call<RemotePackage[]>('browse_packages', { request }),
+
+  /**
+   * 生成安装方案 —— **只返回命令，不会执行**。
+   * 安装会改动真实环境，本工具刻意不代劳。
+   */
+  planInstall: (managerId: string, packageName: string) =>
+    call<InstallPlan>('plan_install', { managerId, package: packageName }),
 
   /**
    * 取右键菜单的管理动作。

@@ -1,4 +1,4 @@
-﻿//! 包管理动作描述。
+//! 包管理动作描述。
 //!
 //! 【安全立场】PackInspect **不代替用户执行更新 / 卸载 / 安装**。
 //! 这类操作会改动用户真实环境，且包管理器自身的交互提示（确认、依赖冲突、权限）无法可靠地
@@ -120,6 +120,11 @@ fn scope_command(manager: &str, name: &str, scope: &str) -> String {
         "winget" => format!("winget show {name}"),
         _ => format!("{manager} show {name}  # 作用域: {scope}"),
     }
+}
+
+/// 供其它模块（如 browse 生成安装方案）复用的安装命令模板
+pub fn install_command_for(manager: &str, name: &str) -> Option<String> {
+    install_command(manager, name)
 }
 
 fn update_command(manager: &str, name: &str) -> Option<String> {

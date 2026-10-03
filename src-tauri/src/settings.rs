@@ -44,7 +44,6 @@ pub fn load() -> AppSettings {
                 .unwrap_or("dark")
                 .to_string(),
             scan_on_startup: value.get("scanOnStartup").and_then(|v| v.as_bool()).unwrap_or(true),
-            show_icons: value.get("showIcons").and_then(|v| v.as_bool()).unwrap_or(true),
         },
         _ => AppSettings::default(),
     }
@@ -64,7 +63,6 @@ pub fn save(settings: &AppSettings) -> AppResult<String> {
         "language": settings.language,
         "theme": settings.theme,
         "scanOnStartup": settings.scan_on_startup,
-        "showIcons": settings.show_icons,
     });
     let text = serde_json::to_string_pretty(&payload)
         .map_err(|e| AppError::internal(format!("序列化设置失败: {e}")))?;
@@ -118,6 +116,11 @@ const ALLOWED_HOSTS: &[&str] = &[
     "community.chocolatey.org",
     "anaconda.org",
     "pub.dev",
+    // 「关于」页展示的项目与框架官网
+    "tauri.app",
+    "vuejs.org",
+    "vite.dev",
+    "www.rust-lang.org",
 ];
 
 /// 校验外部链接：必须 https、无凭据、主机在白名单内

@@ -14,6 +14,7 @@
 //! ```
 
 pub mod actions;
+pub mod browse;
 pub mod cleaner;
 pub mod commands;
 pub mod error;
@@ -53,8 +54,10 @@ pub fn run() {
             commands::export_report,
             commands::get_diagnostics,
             commands::parent_dir,
-            // 包管理：图标 / 动作 / 包内子节点 / 下载引导
-            commands::package_icon,
+            // 包管理：logo / 在线浏览 / 安装方案 / 动作 / 包内子节点 / 下载引导
+            commands::manager_logos,
+            commands::browse_packages,
+            commands::plan_install,
             commands::package_actions,
             commands::package_plugins,
             commands::install_hints,

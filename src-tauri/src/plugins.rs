@@ -461,7 +461,6 @@ pub fn collect_checked(
         latest_version: None,
         plugins: Vec::new(),
         plugins_loaded: false,
-        icon: None,
     };
     collect(&record, timeout_ms)
 }
@@ -485,7 +484,6 @@ mod tests {
             latest_version: None,
             plugins: Vec::new(),
             plugins_loaded: false,
-            icon: None,
         }
     }
 

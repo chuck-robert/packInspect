@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 /**
  * 包详情抽屉：展示安装信息 + 包内插件 / 依赖树。
  * 右键菜单选「管理此包」或行内「详情」都会打开这里。
@@ -8,6 +8,7 @@ import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
 import type { PackageRecord, PluginNode } from '@/types'
 import { formatBytes, ellipsisPath } from '@/utils/format'
+import ManagerLogo from '@/components/ManagerLogo.vue'
 
 const props = defineProps<{ record: PackageRecord | null }>()
 const emit = defineEmits<{ close: [] }>()
@@ -95,7 +96,7 @@ if (!store.report) {
   <div v-if="record" class="modal-backdrop" @click.self="emit('close')">
     <div class="modal" style="width: min(860px, 100%)">
       <div class="modal__head">
-        <img v-if="record.icon" class="pkg-icon" :src="record.icon" alt="" />
+        <ManagerLogo :manager-id="record.manager" :name="record.manager" size="md" />
         <div class="modal__title">{{ record.name }}</div>
         <span class="tag">{{ record.manager }}</span>
         <span class="tag" :class="record.scope === 'global' ? 'tag--accent' : ''">

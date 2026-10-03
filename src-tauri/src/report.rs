@@ -1,10 +1,9 @@
-//! 扫描编排 + 报告导出。
+﻿//! 扫描编排 + 报告导出。
 
 use crate::cleaner;
 use crate::error::AppResult;
 use crate::executor;
 use crate::fsutil;
-use crate::icons;
 use crate::manager;
 use crate::models::*;
 use crate::packages;
@@ -59,12 +58,6 @@ fn collect_packages(id: &str, req: &ScanRequest) -> Vec<PackageRecord> {
     }
 }
 
-/// 为一条记录补上图标（走缓存，避免重复生成 SVG）
-fn attach_icon(icon_cache: &icons::IconCache, record: &mut PackageRecord) {
-    if record.icon.is_none() {
-        record.icon = Some(icon_cache.get_or_create(&record.manager, &record.name));
-    }
-}
 
 /// 执行一次完整扫描。
 ///
@@ -85,10 +78,6 @@ pub fn run_scan(detected: &[ManagerInfo], request: &ScanRequest) -> AppResult<Sc
     // 2. 冗余/旧版本识别 + 图标
     packages::mark_old_versions(&mut records);
     records.sort_by(|a, b| a.manager.cmp(&b.manager).then_with(|| a.name.cmp(&b.name)));
-    let icon_cache = icons::IconCache::default();
-    for record in records.iter_mut() {
-        attach_icon(&icon_cache, record);
-    }
 
     // 3. 缓存统计
     let mut caches: Vec<CacheStats> = Vec::new();

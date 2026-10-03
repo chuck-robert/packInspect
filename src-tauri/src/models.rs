@@ -31,6 +31,9 @@ pub struct ManagerInfo {
     pub config_file: Option<String>,
     /// 当前镜像源配置
     pub registry: Option<RegistryConfig>,
+    /// 包管理器品牌 logo（内联 SVG data URI）。按探测时的主题生成，
+    /// 切换主题后可调用 `manager_logos` 重新获取。
+    pub logo: Option<String>,
     /// 未安装时的下载入口
     pub download_url: Option<String>,
     pub docs_url: Option<String>,
@@ -107,8 +110,7 @@ pub struct PackageRecord {
     /// 子节点是否已加载过 —— 用于区分「没有插件」与「还没查」
     #[serde(default)]
     pub plugins_loaded: bool,
-    /// 包图标：来自权威图标服务或本地生成的字母图标（data URI）
-    pub icon: Option<String>,
+
 }
 
 /// 包管理动作（右键菜单项）。
@@ -319,8 +321,6 @@ pub struct AppSettings {
     pub theme: String,
     /// 是否在启动时自动扫描
     pub scan_on_startup: bool,
-    /// 列表是否显示图标
-    pub show_icons: bool,
 }
 
 impl Default for AppSettings {
@@ -329,7 +329,6 @@ impl Default for AppSettings {
             language: "zh-CN".to_string(),
             theme: "dark".to_string(),
             scan_on_startup: true,
-            show_icons: true,
         }
     }
 }
@@ -342,4 +341,70 @@ pub struct IconResponse {
     pub data_uri: String,
     /// 是否来自缓存
     pub cached: bool,
+}
+
+/// 包管理器的品牌 logo 查询（按主题批量取，供侧边栏/详情页用）
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoRequest {
+    /// dark | light
+    pub theme: String,
+    /// 为空表示全部管理器
+    #[serde(default)]
+    pub managers: Vec<String>,
+}
+
+/// 某个管理器的 logo
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoResponse {
+    pub manager_id: String,
+    pub data_uri: String,
+}
+
+/// 在包仓库里搜索可安装的新包
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowseRequest {
+    pub manager: String,
+    /// 搜索关键词（会先过 `validate::search_query`）
+    pub query: String,
+    #[serde(default = "default_browse_limit")]
+    pub limit: usize,
+    pub timeout_ms: Option<u64>,
+}
+
+fn default_browse_limit() -> usize {
+    25
+}
+
+/// 仓库里的一个可安装包
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePackage {
+    pub name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    /// 下载量 / 热度（有则展示）
+    pub downloads: Option<u64>,
+    /// 包主页地址
+    pub homepage: Option<String>,
+    /// 等价安装命令（本工具不代为执行）
+    pub install_command: Option<String>,
+}
+
+/// 安装动作的结果：只返回「该执行什么命令」，**不会真的执行**
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPlan {
+    pub manager_id: String,
+    pub package: String,
+    /// 可复制的安装命令
+    pub command: String,
+    /// 是否需要联网
+    pub online: bool,
+    /// 是否需要管理员权限
+    pub requires_admin: bool,
+    /// 为什么不由本工具执行
+    pub explanation: String,
 }

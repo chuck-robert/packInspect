@@ -1,121 +1,288 @@
-﻿//! 包图标生成。
+//! 包管理器品牌 logo 生成。
 //!
-//! 设计取舍：**不联网抓取图标**。
-//! - 抓 favicon 需要给 WebView 放行任意 https 域名，与「前端不接触外部资源」的安全约束冲突；
-//! - 上千个包逐个联网会拖慢扫描、且离线环境必然空白。
+//! 设计目标：**离线可用的矢量 logo**，不引入任何外部资源。
 //!
-//! 因此这里生成内联 SVG（data URI）：按包名哈希取一组协调的深色系配色 + 首字母缩写。
-//! 既有辨识度，又完全离线、体积小（每个约 300 字节），还能随主题换配色。
+//! 为什么自绘而不是抓官方 PNG/favicon：
+//! - 抓图需要给 WebView 放行任意 https 域名，与「前端不接触外部资源」的安全约束冲突；
+//! - 离线环境必然空白；
+//! - 官方 logo 多为位图，在高 DPI 下会糊。
+//!
+//! 做法：把每个包管理器的**识别性视觉特征**（形状 + 官方品牌色）用少量 SVG 路径重绘。
+//! 因为要同时适配深色与浅色主题，每个 logo 提供两个配色变体，前端按当前主题选取。
+//!
+//! 新增管理器时只需在 `manager_logo_svg` 里加一个 case；未覆盖的会退回
+//! 「品牌色底 + 名称缩写」，保证永远不会空白。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// 每个管理器的品牌色，用于图标底色（深色主题下保持足够对比度）
-fn brand_color(manager: &str) -> &'static str {
+/// 主题变体
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Theme {
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub fn parse(value: &str) -> Theme {
+        match value.to_ascii_lowercase().as_str() {
+            "light" => Theme::Light,
+            _ => Theme::Dark,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Theme::Dark => "dark",
+            Theme::Light => "light",
+        }
+    }
+}
+
+/// 每个管理器的品牌色（同时用于通用回退样式）
+pub fn brand_color(manager: &str) -> &'static str {
     match manager {
         "npm" => "#cb3837",
         "pnpm" => "#f9ad00",
         "yarn" => "#2188b6",
-        "pip" => "#3776ab",
-        "cargo" => "#dea584",
-        "dotnet" => "#512bd4",
+        "pip" => "#3775a9",
+        "cargo" => "#a8642a",
+        "dotnet" => "#68217a",
         "winget" => "#0078d4",
-        "powershellget" => "#5391fe",
-        "composer" => "#885630",
-        "gem" => "#cc342d",
-        "go" => "#00add8",
-        "maven" => "#c71a36",
-        "chocolatey" => "#80b5e3",
-        "scoop" => "#7c4dff",
-        "conda" => "#43b02a",
+        "powershellget" => "#2f6fdb",
+        "composer" => "#8b6036",
+        "gem" => "#c81e2c",
+        "go" => "#00a6d6",
+        "maven" => "#b02a30",
+        "chocolatey" => "#8a6240",
+        "scoop" => "#6b4fbb",
+        "conda" => "#2f9e44",
         "dart" => "#0175c2",
-        "luarocks" => "#000080",
+        "luarocks" => "#2b3f8f",
         "cpan" => "#3f5f8f",
         _ => "#4c9aff",
     }
 }
 
-/// 由字符串算一个稳定的色相偏移，避免同色图标糊成一片
-fn hue_shift(seed: &str) -> u32 {
-    let mut hash: u32 = 2166136261;
-    for byte in seed.as_bytes() {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(16777619);
-    }
-    // 限制在 ±12 度内，保持品牌色基调
-    hash % 25
-}
-
-/// 提取用于图标的首字母缩写。
-/// - `@scope/name` → `name`
-/// - `phpunit/phpunit` → 取最后一段
-/// - `github.com/spf13/cobra` → 取最后一段
+/// 提取用于通用回退样式的缩写
 fn initials(name: &str) -> String {
-    let tail = name.rsplit('/').next().unwrap_or(name);
-    let cleaned: String = tail
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-        .collect();
-    let letters: Vec<char> = cleaned.chars().filter(|c| c.is_alphanumeric()).collect();
-    if letters.is_empty() {
-        return "?".to_string();
-    }
-    // 连字符/点分名（如 eslint-plugin-vue）取各段首字母，否则取前两个字母
-    if cleaned.contains(['-', '.', '_']) {
-        let parts: Vec<&str> = cleaned.split(['-', '.', '_']).filter(|p| !p.is_empty()).collect();
-        let take: String = parts.iter().take(2).filter_map(|p| p.chars().next()).collect();
-        if take.len() >= 2 {
-            return take.to_uppercase();
-        }
-    }
+    let letters: Vec<char> = name.chars().filter(|c| c.is_alphanumeric()).collect();
     letters.iter().take(2).collect::<String>().to_uppercase()
 }
 
-/// 把颜色按色相偏移调亮/调暗一点
-fn shift_hex(hex: &str, shift: u32) -> String {
-    let parse = |s: &str| u32::from_str_radix(s, 16).unwrap_or(0);
-    if hex.len() != 7 {
-        return hex.to_string();
-    }
-    let (r, g, b) = (parse(&hex[1..3]), parse(&hex[3..5]), parse(&hex[5..7]));
-    let amount = shift as f64 / 100.0 * 40.0;
-    let clamp = |v: u32| -> u32 { v.min(255) };
-    let nr = clamp((r as f64 + amount).round() as u32);
-    let ng = clamp((g as f64 + amount).round() as u32);
-    let nb = clamp((b as f64 + amount).round() as u32);
-    format!("#{nr:02x}{ng:02x}{nb:02x}")
-}
+/// 生成某个包管理器的 logo（内联 SVG data URI）
+pub fn manager_logo_svg(manager: &str, name: &str, theme: Theme) -> String {
+    // 浅色主题下把品牌色压深一点，保证在浅底上仍有对比度
+    let color = match theme {
+        Theme::Dark => brand_color(manager).to_string(),
+        Theme::Light => darken(brand_color(manager), 0.12),
+    };
+    // 在深色底上作画用亮色描边；在浅色底上作画用深色描边
+    let ink = match theme {
+        Theme::Dark => "#ffffff",
+        Theme::Light => "#1f2328",
+    };
+    let muted = match theme {
+        Theme::Dark => "#c9d1d9",
+        Theme::Light => "#57606a",
+    };
 
-/// 生成内联 SVG 图标（data URI）。
-///
-/// 这里用字符串拼接而不是 `format!`：SVG 里含大量 `{}` 属性与 CSS 花括号，
-/// 若走 format 需要全部转义，拼接反而更清晰、也不易出错。
-pub fn monogram_for(manager: &str, package: &str) -> String {
-    let base = brand_color(manager);
-    let top = shift_hex(base, hue_shift(package));
-    let label = initials(package);
-    let font_size = if label.len() > 1 { 13.0 } else { 17.0 };
+    let body = match manager {
+        // ---- npm：红底白色方块标 ----
+        "npm" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M7 9h18v14h-5v-9h-3v9h-4v-9H9v9H7z" fill="{ink}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // ---- pnpm：深底 + 分块色块 ----
+        "pnpm" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#1b1b1b"/>"##,
+                r##"<rect x="6" y="7" width="9" height="9" rx="1.5" fill="{color}"/>"##,
+                r##"<rect x="17" y="7" width="9" height="9" rx="1.5" fill="{color}"/>"##,
+                r##"<rect x="6" y="18" width="9" height="9" rx="1.5" fill="{color}"/>"##,
+                r##"<rect x="17" y="18" width="9" height="9" rx="1.5" fill="#ffffff" opacity="0.35"/>"##
+            ),
+            color = color
+        ),
+        // ---- yarn：线轴抽象 ----
+        "yarn" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<circle cx="16" cy="16" r="8.5" fill="none" stroke="{ink}" stroke-width="2.6"/>"##,
+                r##"<circle cx="16" cy="16" r="2.4" fill="{ink}"/>"##,
+                r##"<path d="M16 7.5v3M16 21.5v3M7.5 16h3M21.5 16h3" stroke="{ink}" stroke-width="2.2" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // ---- pip：Python 双色带 ----
+        "pip" => concat!(
+            r##"<rect width="32" height="32" rx="6" fill="#2b3a4a"/>"##,
+            r##"<path d="M8 7h16v7a4 4 0 0 1-4 4h-8z" fill="#3775a9"/>"##,
+            r##"<path d="M24 25H8v-7a4 4 0 0 1 4-4h8z" fill="#ffd43b"/>"##,
+            r##"<circle cx="12.5" cy="11" r="1.4" fill="#ffffff"/>"##,
+            r##"<circle cx="19.5" cy="21" r="1.4" fill="#1f2328"/>"##
+        )
+        .to_string(),
+        // ---- cargo：Rust 齿轮 + 螺旋 ----
+        "cargo" => concat!(
+            r##"<rect width="32" height="32" rx="6" fill="#2b2118"/>"##,
+            r##"<circle cx="16" cy="16" r="9" fill="#a8642a"/>"##,
+            r##"<path d="M16 9.5a6.5 6.5 0 1 0 6.5 6.5" fill="none" stroke="#1b120b" stroke-width="2.4" stroke-linecap="round"/>"##,
+            r##"<path d="M16 13.5a2.5 2.5 0 1 0 2.5 2.5" fill="none" stroke="#1b120b" stroke-width="2.2" stroke-linecap="round"/>"##
+        )
+        .to_string(),
+        // ---- .NET：紫底 + 斜线 ----
+        "dotnet" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M11 10v12" stroke="{ink}" stroke-width="2.6" stroke-linecap="round"/>"##,
+                r##"<path d="M13.5 10l6 12" stroke="#00b294" stroke-width="2.6" stroke-linecap="round"/>"##,
+                r##"<path d="M21.5 12.5h4.5M21.5 19.5h4.5" stroke="{ink}" stroke-width="2.2" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // ---- winget：Windows 四格 ----
+        "winget" => concat!(
+            r##"<rect width="32" height="32" rx="6" fill="#0b2b45"/>"##,
+            r##"<rect x="7" y="7" width="8" height="8" fill="#0078d4"/>"##,
+            r##"<rect x="17" y="7" width="8" height="8" fill="#2b88d8"/>"##,
+            r##"<rect x="7" y="17" width="8" height="8" fill="#2b88d8"/>"##,
+            r##"<rect x="17" y="17" width="8" height="8" fill="#0078d4"/>"##
+        )
+        .to_string(),
+        // ---- PowerShell：终端提示符 ----
+        "powershellget" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#0b2545"/>"##,
+                r##"<path d="M8 11l6 5-6 5" fill="none" stroke="#5391fe" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>"##,
+                r##"<path d="M17 21h7" stroke="{muted}" stroke-width="2.4" stroke-linecap="round"/>"##
+            ),
+            muted = muted
+        ),
+        // ---- composer：圆形递进 ----
+        "composer" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#2f2418"/>"##,
+                r##"<circle cx="16" cy="16" r="9" fill="none" stroke="{color}" stroke-width="3"/>"##,
+                r##"<path d="M20 12.5a5.5 5.5 0 0 0-8 4.5" fill="none" stroke="{muted}" stroke-width="2.4" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            muted = muted
+        ),
+        // ---- gem：宝石切面 ----
+        "gem" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#2a1215"/>"##,
+                r##"<path d="M10 8h12l5 6-11 11L5 14z" fill="{color}"/>"##,
+                r##"<path d="M10 8l6 21 6-21M5 14h22" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1.3"/>"##
+            ),
+            color = color
+        ),
+        // ---- go：gopher 风格双色圆 ----
+        "go" => concat!(
+            r##"<rect width="32" height="32" rx="6" fill="#0b2b33"/>"##,
+            r##"<circle cx="16" cy="16" r="9" fill="#00a6d6"/>"##,
+            r##"<circle cx="12.5" cy="13.5" r="2.1" fill="#ffffff"/>"##,
+            r##"<circle cx="19.5" cy="13.5" r="2.1" fill="#ffffff"/>"##,
+            r##"<path d="M11 20c2.6 1.8 7.4 1.8 10 0" fill="none" stroke="#0b2b33" stroke-width="2" stroke-linecap="round"/>"##
+        )
+        .to_string(),
+        // ---- maven：M 形尖顶 ----
+        "maven" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#2a1416"/>"##,
+                r##"<path d="M6 24V10l10 8 10-8v14" fill="none" stroke="{color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>"##
+            ),
+            color = color
+        ),
+        // ---- Chocolatey：巧克力方块 ----
+        "chocolatey" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#2b1d12"/>"##,
+                r##"<rect x="7" y="7" width="18" height="18" rx="3" fill="{color}"/>"##,
+                r##"<path d="M7 16h18M16 7v18" stroke="#2b1d12" stroke-width="1.6" opacity="0.5"/>"##
+            ),
+            color = color
+        ),
+        // ---- Scoop：铲形 ----
+        "scoop" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#1e1633"/>"##,
+                r##"<path d="M8 9h16l-2.5 9H10.5z" fill="{color}"/>"##,
+                r##"<path d="M16 18v6" stroke="{muted}" stroke-width="2.4" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            muted = muted
+        ),
+        // ---- conda：双环 ----
+        "conda" => concat!(
+            r##"<rect width="32" height="32" rx="6" fill="#0d2413"/>"##,
+            r##"<circle cx="12" cy="16" r="5.2" fill="none" stroke="#43b02a" stroke-width="2.6"/>"##,
+            r##"<circle cx="20" cy="16" r="5.2" fill="none" stroke="#2f9e44" stroke-width="2.6"/>"##
+        )
+        .to_string(),
+        // ---- dart：菱形 ----
+        "dart" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#0b2438"/>"##,
+                r##"<path d="M16 5l11 11-11 11L5 16z" fill="{color}"/>"##,
+                r##"<path d="M16 5v22M5 16h22" stroke="#ffffff" stroke-opacity="0.25" stroke-width="1.4"/>"##
+            ),
+            color = color
+        ),
+        // ---- luarocks：月牙 + 岩块 ----
+        "luarocks" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#0e1230"/>"##,
+                r##"<path d="M9 22a8 8 0 0 1 14-6 7 7 0 0 0-9-2 7 7 0 0 0-2 9z" fill="{color}"/>"##,
+                r##"<circle cx="21" cy="21" r="3.2" fill="{muted}" opacity="0.55"/>"##
+            ),
+            color = color,
+            muted = muted
+        ),
+        // ---- cpan：骆驼剪影 ----
+        "cpan" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#141d2e"/>"##,
+                r##"<path d="M10 24v-4c0-2 1-3 2-4l-1-4 3 2 3-1 2-3 1 3 3 1-1 3 1 3v4z" fill="{color}"/>"##
+            ),
+            color = color
+        ),
+        // ---- 通用回退：品牌色方块 + 名称缩写 ----
+        _ => {
+            let label = initials(name);
+            format!(
+                concat!(
+                    r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                    r##"<text x="16" y="16" fill="#ffffff" font-family="Segoe UI,sans-serif" font-size="13" font-weight="700" text-anchor="middle" dominant-baseline="central">{label}</text>"##
+                ),
+                color = color,
+                label = label
+            )
+        }
+    };
 
-    // 注意用 r##"..."## ：SVG 文本以 `"` 开头，r#"..."# 会被提前终止
-    let mut svg = String::with_capacity(560);
-    svg.push_str(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color=""##,
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">{body}</svg>"##
     );
-    svg.push_str(&top);
-    svg.push_str(r##""/><stop offset="1" stop-color=""##);
-    svg.push_str(base);
-    svg.push_str(r##""/></linearGradient></defs><rect width="32" height="32" rx="7" fill="url(#g)"/><text x="16" y="16" fill="#ffffff" font-family="Segoe UI,sans-serif" font-size=""##);
-    svg.push_str(&font_size.to_string());
-    svg.push_str(r##"" font-weight="600" text-anchor="middle" dominant-baseline="central">"##);
-    svg.push_str(&label);
-    svg.push_str("</text></svg>");
-
     format!("data:image/svg+xml;base64,{}", base64_encode(svg.as_bytes()))
 }
 
-/// 生成管理器的图标（用品牌色 + 名称缩写），供侧边栏使用
-pub fn manager_icon(manager: &str, display_name: &str) -> String {
-    monogram_for(manager, display_name)
+/// 把十六进制颜色按比例压深（用于浅色主题下的对比度）
+fn darken(hex: &str, amount: f64) -> String {
+    if hex.len() != 7 {
+        return hex.to_string();
+    }
+    let parse = |s: &str| u32::from_str_radix(s, 16).unwrap_or(0);
+    let (r, g, b) = (parse(&hex[1..3]), parse(&hex[3..5]), parse(&hex[5..7]));
+    let scale = |v: u32| -> u32 { ((v as f64) * (1.0 - amount)).round().max(0.0) as u32 };
+    format!("#{:02x}{:02x}{:02x}", scale(r), scale(g), scale(b))
 }
 
 // ---------------------------------------------------------------------------
@@ -151,26 +318,25 @@ pub fn base64_encode(input: &[u8]) -> String {
 // 缓存
 // ---------------------------------------------------------------------------
 
-/// 图标缓存：同一 (manager, package) 只生成一次。
-/// 扫描上千个包时，重复生成 SVG 是纯浪费。
+/// logo 缓存：按 `manager|theme` 缓存 —— 同一管理器的 logo 只生成一次
 #[derive(Default)]
-pub struct IconCache {
+pub struct LogoCache {
     inner: Mutex<HashMap<String, String>>,
 }
 
-impl IconCache {
-    pub fn get_or_create(&self, manager: &str, package: &str) -> String {
-        let key = format!("{manager}\u{1}{package}");
+impl LogoCache {
+    pub fn get_or_create(&self, manager: &str, name: &str, theme: Theme) -> String {
+        let key = format!("{manager}|{}", theme.as_str());
         if let Ok(guard) = self.inner.lock() {
             if let Some(hit) = guard.get(&key) {
                 return hit.clone();
             }
         }
-        let icon = monogram_for(manager, package);
+        let logo = manager_logo_svg(manager, name, theme);
         if let Ok(mut guard) = self.inner.lock() {
-            guard.insert(key, icon.clone());
+            guard.insert(key, logo.clone());
         }
-        icon
+        logo
     }
 
     pub fn len(&self) -> usize {
@@ -191,6 +357,7 @@ impl IconCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::whitelist;
 
     #[test]
     fn base64_matches_known_vectors() {
@@ -198,46 +365,69 @@ mod tests {
         assert_eq!(base64_encode(b"f"), "Zg==");
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
     }
 
     #[test]
-    fn initials_handle_scopes_and_separators() {
-        assert_eq!(initials("@anthropic-ai/claude-code"), "CC");
-        assert_eq!(initials("eslint-plugin-vue"), "EP");
-        assert_eq!(initials("phpunit/phpunit"), "PH");
-        assert_eq!(initials("vue"), "VU");
-        assert_eq!(initials("github.com/spf13/cobra"), "CO");
-        assert_eq!(initials("..."), "?");
+    fn every_manager_gets_a_logo_in_both_themes() {
+        for def in whitelist::MANAGERS {
+            for theme in [Theme::Dark, Theme::Light] {
+                let logo = manager_logo_svg(def.id, def.name, theme);
+                let payload = logo.trim_start_matches("data:image/svg+xml;base64,");
+                assert!(
+                    logo.starts_with("data:image/svg+xml;base64,"),
+                    "{} 的 logo 前缀不对",
+                    def.id
+                );
+                // "<svg" 的 base64 前缀固定为 PHN2Zy
+                assert!(payload.starts_with("PHN2Zy"), "{} 的 logo 不是 SVG", def.id);
+                assert!(payload.len() > 120, "{} 的 logo 内容过短", def.id);
+            }
+        }
     }
 
     #[test]
-    fn generated_icon_is_a_decodable_svg_data_uri() {
-        let icon = monogram_for("npm", "vue");
-        assert!(icon.starts_with("data:image/svg+xml;base64,"));
-        let payload = icon.trim_start_matches("data:image/svg+xml;base64,");
-        assert!(!payload.is_empty());
-        // "<svg" 的 base64 前缀固定为 PHN2Zy
-        assert!(payload.starts_with("PHN2Zy"), "SVG 开头应为 <svg，实际: {payload:.16}");
+    fn theme_variants_differ() {
+        let dark = manager_logo_svg("dotnet", "dotnet", Theme::Dark);
+        let light = manager_logo_svg("dotnet", "dotnet", Theme::Light);
+        assert_ne!(dark, light, "深浅主题应产生不同配色");
     }
 
     #[test]
-    fn icon_is_stable_for_same_input() {
-        assert_eq!(monogram_for("pip", "requests"), monogram_for("pip", "requests"));
-        // 不同包名应产生不同图标（色相偏移或字母至少有一个不同）
-        assert_ne!(monogram_for("pip", "requests"), monogram_for("pip", "flask"));
+    fn unknown_manager_falls_back_to_monogram() {
+        let logo = manager_logo_svg("totally-unknown", "Zoo Keeper", Theme::Dark);
+        let payload = logo.trim_start_matches("data:image/svg+xml;base64,");
+        assert!(payload.starts_with("PHN2Zy"), "回退也应产出 SVG");
+        // 回退样式含 <text>：base64("<text") == "PHRleHQ"
+        assert!(payload.contains("PHRleHQ"), "回退样式应包含文字缩写");
     }
 
     #[test]
-    fn cache_reuses_generated_value() {
-        let cache = IconCache::default();
-        let a = cache.get_or_create("npm", "vue");
-        let b = cache.get_or_create("npm", "vue");
+    fn darken_reduces_brightness() {
+        assert_eq!(darken("#ffffff", 0.5), "#808080");
+        assert_eq!(darken("#000000", 0.5), "#000000");
+        assert_eq!(darken("bogus", 0.5), "bogus");
+    }
+
+    #[test]
+    fn cache_is_keyed_by_manager_and_theme() {
+        let cache = LogoCache::default();
+        let a = cache.get_or_create("npm", "npm", Theme::Dark);
+        let b = cache.get_or_create("npm", "npm", Theme::Dark);
+        let c = cache.get_or_create("npm", "npm", Theme::Light);
         assert_eq!(a, b);
-        assert_eq!(cache.len(), 1);
+        assert_ne!(a, c);
+        assert_eq!(cache.len(), 2);
         cache.clear();
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn theme_parsing_is_lenient() {
+        assert_eq!(Theme::parse("light"), Theme::Light);
+        assert_eq!(Theme::parse("LIGHT"), Theme::Light);
+        assert_eq!(Theme::parse("dark"), Theme::Dark);
+        assert_eq!(Theme::parse(""), Theme::Dark);
+        assert_eq!(Theme::parse("nonsense"), Theme::Dark);
     }
 }

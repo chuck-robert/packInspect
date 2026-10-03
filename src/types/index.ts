@@ -19,6 +19,8 @@ export interface ManagerInfo {
   cacheDir: string | null
   configFile: string | null
   registry: RegistryConfig | null
+  /** 包管理器品牌 logo（内联 SVG data URI，按当前主题配色） */
+  logo: string | null
   downloadUrl: string | null
   docsUrl: string | null
   warnings: string[]
@@ -64,8 +66,6 @@ export interface PackageRecord {
   /** 按需加载：未加载时为空数组 */
   plugins: PluginNode[]
   pluginsLoaded: boolean
-  /** data URI 图标（后端生成，离线可用） */
-  icon: string | null
 }
 
 /** 右键菜单里的管理动作 */
@@ -181,13 +181,6 @@ export interface AppSettings {
   language: string
   theme: string
   scanOnStartup: boolean
-  showIcons: boolean
-}
-
-export interface IconResponse {
-  key: string
-  dataUri: string
-  cached: boolean
 }
 
 /** 后端统一错误结构 */
@@ -199,5 +192,72 @@ export interface AppError {
 /** 清理操作的两阶段状态机，供 UI 强制「预览 → 确认 → 执行」 */
 export type CleanPhase = 'idle' | 'previewing' | 'previewed' | 'executing' | 'done'
 
-/** 导航视图 */
-export type ViewKey = 'manage' | 'packages' | 'cache' | 'registry' | 'settings'
+/**
+ * 顶层视图。
+ *
+ * 注意 `manager`：点击某个包管理器后进入该管理器的详情视图（含分页），
+ * 而不是直接跳到包列表 —— 这样用户先看到「它是什么、装在哪、版本多少」，
+ * 再从分页进入包列表 / 浏览安装 / 管理操作。
+ */
+export type ViewKey = 'manage' | 'manager' | 'cache' | 'registry' | 'settings'
+
+/** 管理器详情页内的分页 */
+export type ManagerTab = 'overview' | 'packages' | 'browse' | 'manage'
+
+/** 包管理器品牌 logo（按主题批量获取） */
+export interface ManagerLogo {
+  managerId: string
+  dataUri: string
+}
+
+export interface LogoRequest {
+  /** dark | light */
+  theme: string
+  /** 为空表示全部 */
+  managers?: string[]
+}
+
+/** 在线仓库里的一个可安装包 */
+export interface RemotePackage {
+  name: string
+  version: string | null
+  description: string | null
+  /** 下载量 / 热度 */
+  downloads: number | null
+  /** 包主页地址 */
+  homepage: string | null
+  /** 等价安装命令（本工具不代为执行） */
+  installCommand: string | null
+}
+
+export interface BrowseRequest {
+  manager: string
+  query: string
+  limit?: number
+  timeoutMs?: number
+}
+
+/**
+ * 安装方案：**只包含命令，不会执行**。
+ * `explanation` 说明为什么不由本工具代为执行。
+ */
+export interface InstallPlan {
+  managerId: string
+  package: string
+  command: string
+  online: boolean
+  requiresAdmin: boolean
+  explanation: string
+}
+
+/** 全局搜索命中的一条结果 */
+export interface SearchHit {
+  kind: 'manager' | 'package'
+  managerId: string
+  managerName: string
+  label: string
+  detail: string
+  /** 包命中时的原始记录，用于直接打开详情 */
+  record?: PackageRecord
+}
+

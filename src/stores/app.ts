@@ -11,11 +11,15 @@ import type {
   CleanResult,
   ExportFormat,
   InstallHint,
+  InstallPlan,
   ManagementAction,
   ManagerInfo,
   PackageRecord,
+  ManagerTab,
   PluginNode,
+  RemotePackage,
   ScanReport,
+  SearchHit,
   ViewKey,
 } from '@/types'
 
@@ -47,8 +51,17 @@ interface State {
 
   /** 当前视图，默认进入「包管理」页 */
   view: ViewKey
+  /** 管理器详情页内的分页，默认先看「概览」 */
+  managerTab: ManagerTab
   /** 当前选中的管理器（null = 全部） */
   activeManager: string | null
+  /** 在线浏览结果 */
+  remotePackages: RemotePackage[]
+  browseQuery: string
+  browseLoading: boolean
+  browseError: string | null
+  /** 最近一次生成的安装方案 */
+  installPlan: InstallPlan | null
   keyword: string
   onlyRedundant: boolean
 
@@ -76,7 +89,13 @@ export const useAppStore = defineStore('app', {
     loadingCandidates: false,
     savingRegistry: false,
     view: 'manage',
+    managerTab: 'overview',
     activeManager: null,
+    remotePackages: [],
+    browseQuery: '',
+    browseLoading: false,
+    browseError: null,
+    installPlan: null,
     keyword: '',
     onlyRedundant: false,
     error: null,
@@ -90,30 +109,69 @@ export const useAppStore = defineStore('app', {
     /** 未安装的管理器（用于下载引导） */
     missing: (s): ManagerInfo[] => s.managers.filter((m) => !m.detected),
 
-    /** 按阶段分组，供管理页展示三期规划 */
-    byTier(s): { tier: number; items: ManagerInfo[] }[] {
-      const groups = new Map<number, ManagerInfo[]>()
-      for (const manager of s.managers) {
-        if (!groups.has(manager.tier)) groups.set(manager.tier, [])
-        groups.get(manager.tier)!.push(manager)
-      }
-      return [...groups.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([tier, items]) => ({
-          tier,
-          // 已安装的排在前面，其次按名称
-          items: items.sort((a, b) => Number(b.detected) - Number(a.detected) || a.name.localeCompare(b.name)),
-        }))
+    /**
+     * 侧边栏用的管理器列表：已安装在前，未安装在后，同组按名称排序。
+     * 不再按「期数」分组 —— 阶段标签已从界面移除。
+     */
+    sidebarManagers(s): ManagerInfo[] {
+      return [...s.managers].sort(
+        (a, b) => Number(b.detected) - Number(a.detected) || a.name.localeCompare(b.name),
+      )
     },
 
-    /** 侧边栏分组：按语言生态归并（只含有探测结果的） */
-    groupedManagers(s): { language: string; items: ManagerInfo[] }[] {
-      const byLang = new Map<string, ManagerInfo[]>()
+    /** 当前选中的管理器对象 */
+    activeManagerInfo(s): ManagerInfo | null {
+      return s.activeManager ? s.managers.find((m) => m.id === s.activeManager) ?? null : null
+    },
+
+    /**
+     * 全局搜索结果：同时命中「包管理器」与「已安装包」。
+     *
+     * 上限 50 条：结果只是给用户跳转用的，不需要列出全部 500 个包。
+     */
+    searchHits(s): SearchHit[] {
+      const keyword = s.keyword.trim().toLowerCase()
+      if (keyword.length < 1) return []
+      const hits: SearchHit[] = []
+
+      // 1) 包管理器：命中名称 / id / 语言
       for (const manager of s.managers) {
-        if (!byLang.has(manager.language)) byLang.set(manager.language, [])
-        byLang.get(manager.language)!.push(manager)
+        if (
+          manager.name.toLowerCase().includes(keyword) ||
+          manager.id.toLowerCase().includes(keyword) ||
+          manager.language.toLowerCase().includes(keyword)
+        ) {
+          hits.push({
+            kind: 'manager',
+            managerId: manager.id,
+            managerName: manager.name,
+            label: manager.name,
+            detail: manager.detected
+              ? `${manager.version ?? ''} · ${manager.globalRoot ?? ''}`.trim()
+              : '',
+          })
+        }
       }
-      return [...byLang.entries()].map(([language, items]) => ({ language, items }))
+
+      // 2) 已安装包：命中名称 / 版本
+      for (const record of s.report?.packages ?? []) {
+        if (hits.length >= 50) break
+        if (
+          record.name.toLowerCase().includes(keyword) ||
+          (record.version ?? '').toLowerCase().includes(keyword)
+        ) {
+          const managerName = s.managers.find((m) => m.id === record.manager)?.name ?? record.manager
+          hits.push({
+            kind: 'package',
+            managerId: record.manager,
+            managerName,
+            label: record.name,
+            detail: `${record.version ?? ''} · ${managerName}`,
+            record,
+          })
+        }
+      }
+      return hits
     },
 
     /** 某个管理器扫到的包数量 */
@@ -191,6 +249,81 @@ export const useAppStore = defineStore('app', {
 
     setView(view: ViewKey) {
       this.view = view
+      // 离开管理器详情页时清掉选中，避免下次回来看到上一次的分页
+      if (view !== 'manager') this.activeManager = null
+    },
+
+    /**
+     * 进入某个包管理器的详情页。
+     *
+     * 默认落在「概览」分页 —— 用户先看到它是什么、装在哪、版本多少，
+     * 再从分页进入包列表 / 浏览安装 / 管理操作。
+     */
+    openManager(id: string, tab: ManagerTab = 'overview') {
+      this.activeManager = id
+      this.managerTab = tab
+      this.view = 'manager'
+      this.keyword = ''
+      this.onlyRedundant = false
+      // 浏览结果属于上一个管理器，切换时清空
+      this.remotePackages = []
+      this.browseQuery = ''
+      this.browseError = null
+      this.installPlan = null
+    },
+
+    setManagerTab(tab: ManagerTab) {
+      this.managerTab = tab
+    },
+
+    // ---------------------------------------------------------------- 在线浏览
+    /**
+     * 在包仓库里搜索可安装的包。
+     * 只查询官方搜索 API；后端超时/格式变化时返回空列表而不是抛错。
+     */
+    async browse(query: string) {
+      const managerId = this.activeManager
+      if (!managerId) return
+      if (!query.trim()) {
+        this.remotePackages = []
+        this.browseError = null
+        return
+      }
+      this.browseLoading = true
+      this.browseError = null
+      this.browseQuery = query
+      this.installPlan = null
+      try {
+        this.remotePackages = await api.browsePackages({ manager: managerId, query, limit: 25 })
+        this.pushLog(`在 ${managerId} 仓库中搜索「${query}」：${this.remotePackages.length} 条结果`)
+      } catch (e) {
+        const err = e instanceof IpcError ? e : IpcError.from(e)
+        this.remotePackages = []
+        // 不支持在线浏览属于可预期状态，不弹全局错误条
+        this.browseError =
+          err.code === 'BROWSE_UNSUPPORTED' || err.code === 'NO_CURL'
+            ? err.message
+            : `查询失败：${err.message}`
+      } finally {
+        this.browseLoading = false
+      }
+    },
+
+    /** 生成安装方案（只返回命令，不执行） */
+    async planInstall(packageName: string) {
+      const managerId = this.activeManager
+      if (!managerId) return null
+      try {
+        this.installPlan = await api.planInstall(managerId, packageName)
+        return this.installPlan
+      } catch (e) {
+        this.handleError(e, '生成安装方案')
+        return null
+      }
+    },
+
+    clearInstallPlan() {
+      this.installPlan = null
     },
 
     setActiveManager(id: string | null) {
@@ -201,7 +334,7 @@ export const useAppStore = defineStore('app', {
 
     // ---------------------------------------------------------------- 数据加载
     /** 首屏：先渲染静态定义，再后台探测 */
-    async boot(scanOnStartup: boolean) {
+    async boot(scanOnStartup: boolean, theme = 'dark') {
       this.booting = true
       this.error = null
       try {
@@ -212,17 +345,45 @@ export const useAppStore = defineStore('app', {
       } finally {
         this.booting = false
       }
-      await this.detect()
+      await this.detect(false, theme)
       if (scanOnStartup && this.installed.length > 0) {
         // 启动即扫描 → 默认落在「包管理」页时列表就已经有数据
         await this.scan({ measureSize: false, silent: true })
       }
     },
 
-    async detect(force = false) {
+    /**
+     * 切换主题后刷新 logo 配色。
+     * 只重取 logo，不重新探测（版本号没变，没必要再跑一遍命令）。
+     */
+    async refreshLogos(theme: string) {
+      try {
+        const logos = await api.managerLogos(theme)
+        for (const item of logos) {
+          const manager = this.managers.find((m) => m.id === item.managerId)
+          if (manager) manager.logo = item.dataUri
+        }
+      } catch (e) {
+        this.handleError(e, '刷新包管理器 logo')
+      }
+    },
+
+    /**
+     * 按需取 logo（供 ManagerLogo 组件在 store 里没有时单独调用）。
+     * 不写入 store.managers，避免改变探测结果的语义。
+     */
+    async loadLogos(theme: string, managers: string[]) {
+      return api.managerLogos(theme, managers)
+    },
+
+    /**
+     * 探测本机包管理器。
+     * `theme` 决定 logo 配色，因此必须传当前生效的主题（dark/light）。
+     */
+    async detect(force = false, theme = 'dark') {
       this.detecting = true
       try {
-        this.managers = await api.detectManagers(force)
+        this.managers = await api.detectManagers(force, undefined, theme)
         const found = this.installed.map((m) => `${m.name}${m.version ? ` ${m.version}` : ''}`)
         this.pushLog(
           found.length ? `探测完成，检测到：${found.join('、')}` : '探测完成，未检测到任何包管理器',

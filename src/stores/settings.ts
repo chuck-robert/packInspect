@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 设置 store：语言 / 主题 / 启动行为。
  *
  * 单独拆出来是为了打破循环依赖：`app` store 需要读设置来决定是否自动扫描，
@@ -24,7 +24,6 @@ const DEFAULTS: AppSettings = {
   language: 'zh-CN',
   theme: 'dark',
   scanOnStartup: true,
-  showIcons: true,
 }
 
 export const useSettingsStore = defineStore('settings', {
