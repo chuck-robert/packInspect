@@ -5,12 +5,16 @@
 //! - 耗时命令内部走 `spawn_blocking`，避免阻塞 Tauri 的 IPC 线程池
 //! - 返回值统一 `Result<T, AppError>`，错误带 code 便于前端分支处理
 
+use crate::actions;
 use crate::error::{AppError, AppResult};
+use crate::icons;
 use crate::manager;
 use crate::models::*;
 use crate::packages;
+use crate::plugins;
 use crate::registry;
 use crate::report;
+use crate::settings;
 use crate::validate;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -20,6 +24,8 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 pub struct AppState {
     cache: Mutex<Option<(Instant, Vec<ManagerInfo>)>>,
+    /// 图标缓存：同一 (manager, package) 只生成一次 SVG
+    icons: icons::IconCache,
 }
 
 /// 探测结果缓存有效期。版本号在会话内基本不变，5 分钟足够。
@@ -60,6 +66,7 @@ fn detect_all(timeout_ms: u64) -> AppResult<Vec<ManagerInfo>> {
                 id: def.id.to_string(),
                 name: def.name.to_string(),
                 language: def.language.to_string(),
+                tier: def.tier,
                 detected: false,
                 version: None,
                 exe_path: None,
@@ -67,6 +74,8 @@ fn detect_all(timeout_ms: u64) -> AppResult<Vec<ManagerInfo>> {
                 cache_dir: None,
                 config_file: None,
                 registry: None,
+                download_url: Some(def.download_url.to_string()),
+                docs_url: Some(def.docs_url.to_string()),
                 warnings: vec![format!("探测失败: {}", e.message)],
             }),
         }
@@ -251,6 +260,103 @@ pub fn get_diagnostics() -> serde_json::Value {
 #[tauri::command]
 pub fn parent_dir(path: String) -> AppResult<String> {
     report::parent_dir_of(&path).ok_or_else(|| AppError::invalid("该路径没有父目录"))
+}
+
+// ---------------------------------------------------------------------------
+// 包图标 / 管理动作 / 包内子节点
+// ---------------------------------------------------------------------------
+
+/// 取单个包的图标（走全局缓存，重复调用零成本）
+#[tauri::command]
+pub fn package_icon(state: tauri::State<'_, AppState>, manager_id: String, package: String) -> AppResult<IconResponse> {
+    packages::ensure_known(&manager_id)?;
+    validate::package_name(&package)?;
+    let before = state.icons.len();
+    let data_uri = state.icons.get_or_create(&manager_id, &package);
+    Ok(IconResponse {
+        key: format!("{manager_id}/{package}"),
+        data_uri,
+        cached: state.icons.len() == before,
+    })
+}
+
+/// 列出一个包支持的右键管理动作。
+///
+/// 一期只有 `manage` / `inspect` / `openDocs` 为可用状态；
+/// 更新、卸载、安装会返回**等价官方命令**但 `enabled = false`，由界面标注为占位。
+#[tauri::command]
+pub fn package_actions(
+    manager_id: String,
+    package: String,
+    scope: Option<String>,
+) -> AppResult<Vec<ManagementAction>> {
+    packages::ensure_known(&manager_id)?;
+    validate::package_name(&package)?;
+    Ok(actions::actions_for(&manager_id, &package, scope.as_deref().unwrap_or("global")))
+}
+
+/// 展开包内子节点（插件 / 扩展 / 依赖 / 文件）
+#[tauri::command]
+pub async fn package_plugins(
+    request: PluginsRequest,
+) -> AppResult<Vec<PluginNode>> {
+    let timeout = clamp_timeout(request.timeout_ms, 20_000);
+    blocking(move || {
+        plugins::collect_checked(
+            &request.manager,
+            &request.package,
+            request.path,
+            request.version,
+            timeout,
+        )
+    })
+    .await
+}
+
+/// 未检测到的包管理器 + 官方下载入口（满足「没有就提示去官网下载」）
+#[tauri::command]
+pub async fn install_hints(state: tauri::State<'_, AppState>) -> AppResult<Vec<InstallHint>> {
+    let detected = snapshot(&state, 20_000)?;
+    Ok(report::install_hints(&detected))
+}
+
+// ---------------------------------------------------------------------------
+// 外部链接 / 设置
+// ---------------------------------------------------------------------------
+
+/// 用系统默认浏览器打开链接。
+///
+/// 只接受 https 且主机在白名单内的地址 —— 前端无法借此打开任意 URL。
+#[tauri::command]
+pub async fn open_external_link(request: OpenLinkRequest) -> AppResult<String> {
+    let url = match request.kind.as_str() {
+        // kind = manager：由后端从白名单定义里取官方地址，前端不能自带 URL
+        "manager" => {
+            let def = crate::whitelist::find(&request.target)
+                .ok_or_else(|| AppError::invalid(format!("未知包管理器: {}", request.target)))?;
+            def.download_url.to_string()
+        }
+        "docs" => {
+            let def = crate::whitelist::find(&request.target)
+                .ok_or_else(|| AppError::invalid(format!("未知包管理器: {}", request.target)))?;
+            def.docs_url.to_string()
+        }
+        "url" => request.target.clone(),
+        other => return Err(AppError::invalid(format!("不支持的链接类型: {other}"))),
+    };
+    blocking(move || settings::open_external(&url)).await
+}
+
+/// 读取持久化设置
+#[tauri::command]
+pub fn get_settings() -> AppSettings {
+    settings::load()
+}
+
+/// 保存设置
+#[tauri::command]
+pub async fn save_settings(settings_data: AppSettings) -> AppResult<String> {
+    blocking(move || settings::save(&settings_data)).await
 }
 
 #[cfg(test)]

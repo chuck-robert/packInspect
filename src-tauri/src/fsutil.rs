@@ -1,4 +1,4 @@
-//! 文件系统工具：目录体积统计、文本/JSON 读取、人类可读体积格式化。
+﻿//! 文件系统工具：目录体积统计、文本/JSON 读取、人类可读体积格式化。
 
 use crate::error::{AppError, AppResult};
 use serde_json::Value;
@@ -83,7 +83,7 @@ pub fn children_stat(root: &Path, max_entries: u64) -> Vec<(String, PathBuf, Dir
         result.push((name, path, stat));
     }
     // 体积从大到小，界面默认按占用排序
-    result.sort_by(|a, b| b.2.bytes.cmp(&a.2.bytes));
+    result.sort_by_key(|entry| std::cmp::Reverse(entry.2.bytes));
     result
 }
 

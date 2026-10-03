@@ -1,4 +1,4 @@
-//! 缓存清理：候选枚举 + 安全执行。
+﻿//! 缓存清理：候选枚举 + 安全执行。
 //!
 //! 【安全边界】
 //! 1. 只枚举 `whitelist::clean_allowed` 允许的 (manager, kind) 组合；
@@ -208,7 +208,7 @@ pub fn enumerate(records: &[PackageRecord], timeout_ms: u64) -> Vec<CleanCandida
     out.extend(old_version_candidates(records, timeout_ms));
 
     // 按体积降序，界面默认关注占用最大的项
-    out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    out.sort_by_key(|c| std::cmp::Reverse(c.bytes));
     out
 }
 

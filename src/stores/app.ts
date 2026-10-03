@@ -1,5 +1,5 @@
 /**
- * 全局状态。单一 store 足够：数据量不大，且各视图之间强耦合（扫描结果 → 表格 / 缓存 / 清理）。
+ * 全局状态。单一 store 足够：数据量不大，且各视图之间强耦合（扫描结果 → 管理页 / 表格 / 缓存 / 清理）。
  */
 
 import { defineStore } from 'pinia'
@@ -10,9 +10,13 @@ import type {
   CleanPhase,
   CleanResult,
   ExportFormat,
+  InstallHint,
+  ManagementAction,
   ManagerInfo,
   PackageRecord,
+  PluginNode,
   ScanReport,
+  ViewKey,
 } from '@/types'
 
 interface State {
@@ -23,9 +27,17 @@ interface State {
   report: ScanReport | null
   caches: CacheStats[]
   candidates: CleanCandidate[]
-  /** cleanup 两阶段状态机 */
+  /** 未安装管理器的下载引导 */
+  hints: InstallHint[]
+  /** 清理流程的两阶段状态机 */
   cleanPhase: CleanPhase
   previewResults: CleanResult[]
+
+  /** 按包名缓存的右键动作（避免每次右键都请求后端） */
+  actionsCache: Record<string, ManagementAction[]>
+  /** 按 `manager/name` 缓存的包内子节点 */
+  pluginsCache: Record<string, PluginNode[]>
+  pluginsLoading: string | null
 
   booting: boolean
   detecting: boolean
@@ -33,11 +45,11 @@ interface State {
   loadingCandidates: boolean
   savingRegistry: boolean
 
+  /** 当前视图，默认进入「包管理」页 */
+  view: ViewKey
   /** 当前选中的管理器（null = 全部） */
   activeManager: string | null
-  /** 关键字搜索 */
   keyword: string
-  /** 是否只看冗余项 */
   onlyRedundant: boolean
 
   error: { code: string; message: string } | null
@@ -52,13 +64,18 @@ export const useAppStore = defineStore('app', {
     report: null,
     caches: [],
     candidates: [],
+    hints: [],
     cleanPhase: 'idle',
     previewResults: [],
+    actionsCache: {},
+    pluginsCache: {},
+    pluginsLoading: null,
     booting: false,
     detecting: false,
     scanning: false,
     loadingCandidates: false,
     savingRegistry: false,
+    view: 'manage',
     activeManager: null,
     keyword: '',
     onlyRedundant: false,
@@ -68,18 +85,44 @@ export const useAppStore = defineStore('app', {
   }),
 
   getters: {
-    /** 已安装的管理器 */
     installed: (s): ManagerInfo[] => s.managers.filter((m) => m.detected),
 
-    /** 侧边栏分组：按语言生态归并 */
+    /** 未安装的管理器（用于下载引导） */
+    missing: (s): ManagerInfo[] => s.managers.filter((m) => !m.detected),
+
+    /** 按阶段分组，供管理页展示三期规划 */
+    byTier(s): { tier: number; items: ManagerInfo[] }[] {
+      const groups = new Map<number, ManagerInfo[]>()
+      for (const manager of s.managers) {
+        if (!groups.has(manager.tier)) groups.set(manager.tier, [])
+        groups.get(manager.tier)!.push(manager)
+      }
+      return [...groups.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([tier, items]) => ({
+          tier,
+          // 已安装的排在前面，其次按名称
+          items: items.sort((a, b) => Number(b.detected) - Number(a.detected) || a.name.localeCompare(b.name)),
+        }))
+    },
+
+    /** 侧边栏分组：按语言生态归并（只含有探测结果的） */
     groupedManagers(s): { language: string; items: ManagerInfo[] }[] {
       const byLang = new Map<string, ManagerInfo[]>()
-      for (const m of s.managers) {
-        if (!byLang.has(m.language)) byLang.set(m.language, [])
-        byLang.get(m.language)!.push(m)
+      for (const manager of s.managers) {
+        if (!byLang.has(manager.language)) byLang.set(manager.language, [])
+        byLang.get(manager.language)!.push(manager)
       }
       return [...byLang.entries()].map(([language, items]) => ({ language, items }))
     },
+
+    /** 某个管理器扫到的包数量 */
+    packageCountOf: (s) => (managerId: string) =>
+      (s.report?.packages ?? []).filter((p) => p.manager === managerId).length,
+
+    /** 某个管理器的缓存占用 */
+    cacheOf: (s) => (managerId: string) =>
+      s.caches.find((c) => c.managerId === managerId)?.totalBytes ?? null,
 
     /** 当前视图的包列表 */
     visiblePackages(s): PackageRecord[] {
@@ -97,24 +140,23 @@ export const useAppStore = defineStore('app', {
       })
     },
 
-    /** 当前视图的缓存统计 */
     visibleCaches(s): CacheStats[] {
       if (!s.activeManager) return s.caches
       return s.caches.filter((c) => c.managerId === s.activeManager)
     },
 
-    /** 可清理候选（受保护项不可勾选） */
     selectableCandidates: (s): CleanCandidate[] => s.candidates.filter((c) => !c.protected),
 
-    /** 当前选中管理器对应的镜像源 */
+    /** 当前选中管理器的镜像源 */
     activeRegistry(s) {
       if (!s.activeManager) return null
       return s.managers.find((m) => m.id === s.activeManager)?.registry ?? null
     },
 
-    /** 全部包体积合计（仅在测量过体积时有意义） */
     measuredBytes: (s): number =>
       (s.report?.packages ?? []).reduce((sum, p) => sum + (p.size ?? 0), 0),
+
+    redundantCount: (s): number => (s.report?.packages ?? []).filter((p) => p.redundant).length,
   },
 
   actions: {
@@ -129,7 +171,6 @@ export const useAppStore = defineStore('app', {
       this.toast = { kind, message }
     },
 
-    /** 统一错误处理：可预期状态（未安装等）不弹红条 */
     handleError(e: unknown, context: string) {
       const err = e instanceof IpcError ? e : IpcError.from(e)
       this.pushLog(`${context} 失败: ${err.message}`)
@@ -148,6 +189,10 @@ export const useAppStore = defineStore('app', {
       this.toast = null
     },
 
+    setView(view: ViewKey) {
+      this.view = view
+    },
+
     setActiveManager(id: string | null) {
       this.activeManager = id
       this.keyword = ''
@@ -156,7 +201,7 @@ export const useAppStore = defineStore('app', {
 
     // ---------------------------------------------------------------- 数据加载
     /** 首屏：先渲染静态定义，再后台探测 */
-    async boot() {
+    async boot(scanOnStartup: boolean) {
       this.booting = true
       this.error = null
       try {
@@ -168,6 +213,10 @@ export const useAppStore = defineStore('app', {
         this.booting = false
       }
       await this.detect()
+      if (scanOnStartup && this.installed.length > 0) {
+        // 启动即扫描 → 默认落在「包管理」页时列表就已经有数据
+        await this.scan({ measureSize: false, silent: true })
+      }
     },
 
     async detect(force = false) {
@@ -178,10 +227,17 @@ export const useAppStore = defineStore('app', {
         this.pushLog(
           found.length ? `探测完成，检测到：${found.join('、')}` : '探测完成，未检测到任何包管理器',
         )
-        // 探测结果变化后，旧的扫描结果可能失效
+        // 下载引导：未检测到的管理器给出官网入口
+        try {
+          this.hints = await api.installHints()
+        } catch {
+          this.hints = []
+        }
         if (force) {
           this.candidates = []
           this.cleanPhase = 'idle'
+          this.pluginsCache = {}
+          this.actionsCache = {}
         }
       } catch (e) {
         this.handleError(e, '探测包管理器')
@@ -192,8 +248,9 @@ export const useAppStore = defineStore('app', {
 
     /**
      * 执行扫描。`measureSize` 会逐个目录统计体积，明显更慢，因此作为可选开关。
+     * `silent` 用于启动自动扫描：不弹成功提示，避免打扰。
      */
-    async scan(options: { managers?: string[]; measureSize?: boolean } = {}) {
+    async scan(options: { managers?: string[]; measureSize?: boolean; silent?: boolean } = {}) {
       this.scanning = true
       this.error = null
       try {
@@ -208,20 +265,28 @@ export const useAppStore = defineStore('app', {
         this.candidates = []
         this.cleanPhase = 'idle'
         this.previewResults = []
+        this.pluginsCache = {}
         this.pushLog(
           `扫描完成：${report.totalPackages} 个包，缓存 ${report.totalCacheBytes} 字节，耗时 ${report.durationMs} ms`,
         )
-        this.notify(
-          'success',
-          options.measureSize
-            ? `扫描完成，共 ${report.totalPackages} 个包（含体积统计）`
-            : `扫描完成，共 ${report.totalPackages} 个包`,
-        )
+        if (!options.silent) {
+          this.notify(
+            'success',
+            options.measureSize
+              ? `扫描完成，共 ${report.totalPackages} 个包（含体积统计）`
+              : `扫描完成，共 ${report.totalPackages} 个包`,
+          )
+        }
       } catch (e) {
         this.handleError(e, '扫描')
       } finally {
         this.scanning = false
       }
+    },
+
+    /** 某个包是否已经扫过（用于管理页按钮状态） */
+    hasScanned(managerId: string): boolean {
+      return (this.report?.packages ?? []).some((p) => p.manager === managerId)
     },
 
     /** 只刷新当前管理器的缓存统计（比整轮扫描快得多） */
@@ -248,7 +313,6 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 保存镜像源：先预览，再落盘（后端会自动备份原文件） */
     async saveRegistry(managerId: string, key: string, value: string) {
       this.savingRegistry = true
       try {
@@ -265,8 +329,69 @@ export const useAppStore = defineStore('app', {
       }
     },
 
+    // ---------------------------------------------------------------- 包管理交互
+    /** 右键菜单的动作列表（带缓存） */
+    async loadActions(record: PackageRecord): Promise<ManagementAction[]> {
+      const key = `${record.manager}\u{1}${record.name}`
+      const cached = this.actionsCache[key]
+      if (cached) return cached
+      try {
+        const actions = await api.packageActions(record.manager, record.name, record.scope)
+        this.actionsCache[key] = actions
+        return actions
+      } catch (e) {
+        this.handleError(e, '读取管理动作')
+        return []
+      }
+    },
+
+    /** 展开包内插件 / 依赖（按需加载） */
+    async loadPlugins(record: PackageRecord, force = false): Promise<PluginNode[]> {
+      const key = `${record.manager}\u{1}${record.name}`
+      if (!force && this.pluginsCache[key]) {
+        record.plugins = this.pluginsCache[key]
+        record.pluginsLoaded = true
+        return this.pluginsCache[key]
+      }
+      this.pluginsLoading = key
+      try {
+        const nodes = await api.packagePlugins({
+          manager: record.manager,
+          package: record.name,
+          version: record.version,
+          path: record.path,
+          timeoutMs: 25_000,
+        })
+        this.pluginsCache[key] = nodes
+        record.plugins = nodes
+        record.pluginsLoaded = true
+        return nodes
+      } catch (e) {
+        this.handleError(e, '分析包内容')
+        return []
+      } finally {
+        this.pluginsLoading = null
+      }
+    },
+
+    /** 打开外部链接：kind = manager 时由后端决定地址 */
+    async openManagedLink(kind: 'manager' | 'docs', managerId: string) {
+      try {
+        await api.openExternalLink({ kind, target: managerId })
+      } catch (e) {
+        this.handleError(e, '打开链接')
+      }
+    },
+
+    async openUrl(url: string) {
+      try {
+        await api.openExternalLink({ kind: 'url', target: url })
+      } catch (e) {
+        this.handleError(e, '打开链接')
+      }
+    },
+
     // ---------------------------------------------------------------- 清理流程
-    /** 第一阶段：枚举候选 */
     async loadCandidates() {
       this.loadingCandidates = true
       this.error = null
@@ -282,10 +407,6 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /**
-     * 第二阶段：dry-run 预览。后端只算账不删除，
-     * 返回的 freedBytes 即「确认后能释放多少」。
-     */
     async previewClean(ids: string[]) {
       if (ids.length === 0) {
         this.notify('warn', '请先勾选要清理的项目')
@@ -305,7 +426,6 @@ export const useAppStore = defineStore('app', {
       return this.previewResults.filter((r) => r.ok).reduce((sum, r) => sum + r.freedBytes, 0)
     },
 
-    /** 第三阶段：真正执行（调用方必须已获得用户二次确认） */
     async executeClean(ids: string[]) {
       this.cleanPhase = 'executing'
       try {
@@ -329,7 +449,6 @@ export const useAppStore = defineStore('app', {
       }
     },
 
-    /** 取消预览，回到未选中状态 */
     resetClean() {
       this.cleanPhase = 'idle'
       this.previewResults = []

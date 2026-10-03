@@ -1,19 +1,34 @@
 <script setup lang="ts">
 /**
- * 已安装包视图：搜索 / 过滤 / 排序 / 详情。
- * 数据全部来自 store，组件本身不做任何 IPC 调用（除详情里的「复制路径」用剪贴板 API）。
+ * 已安装包列表。
+ *
+ * 按要求只展示「包名 + 版本」两列（体积可选），路径等细节收进详情抽屉与右键菜单，
+ * 让主列表保持扫读友好。
+ *
+ * 交互：
+ * - 左键行 → 打开详情抽屉
+ * - 右键行 → 打开管理菜单（含更新 / 卸载 / 安装占位按钮 + 包内插件入口）
+ * - 右键空白 → 无操作（避免误触）
  */
 import { computed, ref } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { useSettingsStore } from '@/stores/settings'
+import { useI18n } from '@/i18n'
 import type { PackageRecord } from '@/types'
-import { SCOPE_LABELS, formatBytesShort, formatCount, ellipsisPath } from '@/utils/format'
-
-type SortKey = 'name' | 'version' | 'manager' | 'size'
+import PackageContextMenu from '@/components/PackageContextMenu.vue'
+import PackageDetailDrawer from '@/components/PackageDetailDrawer.vue'
+import { formatBytesShort, formatCount } from '@/utils/format'
 
 const store = useAppStore()
+const settings = useSettingsStore()
+const { t } = useI18n()
+
+type SortKey = 'name' | 'version' | 'size'
+
 const sortKey = ref<SortKey>('name')
 const sortAsc = ref(true)
-const selected = ref<PackageRecord | null>(null)
+const detailTarget = ref<PackageRecord | null>(null)
+const menuState = ref<{ record: PackageRecord; x: number; y: number } | null>(null)
 
 const rows = computed(() => {
   const list = [...store.visiblePackages]
@@ -24,8 +39,6 @@ const rows = computed(() => {
         return ((a.size ?? 0) - (b.size ?? 0)) * dir
       case 'version':
         return (a.version ?? '').localeCompare(b.version ?? '', undefined, { numeric: true }) * dir
-      case 'manager':
-        return a.manager.localeCompare(b.manager) * dir
       default:
         return a.name.localeCompare(b.name) * dir
     }
@@ -33,9 +46,7 @@ const rows = computed(() => {
   return list
 })
 
-const redundantCount = computed(
-  () => store.visiblePackages.filter((p) => p.redundant).length,
-)
+const redundantCount = computed(() => store.visiblePackages.filter((p) => p.redundant).length)
 
 function toggleSort(key: SortKey) {
   if (sortKey.value === key) sortAsc.value = !sortAsc.value
@@ -50,14 +61,12 @@ function sortIndicator(key: SortKey) {
   return sortAsc.value ? ' ▲' : ' ▼'
 }
 
-async function copyPath(path: string | null) {
-  if (!path) return
-  try {
-    await navigator.clipboard.writeText(path)
-    store.notify('info', '路径已复制到剪贴板')
-  } catch {
-    store.notify('warn', '复制失败，请手动选择文本')
-  }
+function openMenu(record: PackageRecord, event: MouseEvent) {
+  menuState.value = { record, x: event.clientX, y: event.clientY }
+}
+
+function openDetail(record: PackageRecord) {
+  detailTarget.value = record
 }
 </script>
 
@@ -69,77 +78,87 @@ async function copyPath(path: string | null) {
         v-model="store.keyword"
         class="input input--search"
         type="search"
-        placeholder="搜索包名 / 版本 / 路径"
+        :placeholder="t('packages.search')"
       />
       <label class="checkbox">
         <input v-model="store.onlyRedundant" type="checkbox" />
-        只看冗余项
+        {{ t('packages.onlyRedundant') }}
       </label>
-      <span v-if="redundantCount" class="tag tag--warn">冗余 {{ redundantCount }}</span>
-      <span class="tag">{{ formatCount(rows.length) }} 项</span>
+      <span v-if="redundantCount" class="tag tag--warn">
+        {{ t('packages.redundant') }} {{ redundantCount }}
+      </span>
+      <span class="tag">{{ t('packages.count', { count: formatCount(rows.length) }) }}</span>
       <span class="banner__spacer" />
       <span v-if="store.measuredBytes > 0" class="hint">
-        已统计体积合计：{{ formatBytesShort(store.measuredBytes) }}
+        {{ formatBytesShort(store.measuredBytes) }}
       </span>
     </div>
 
     <!-- 空态 -->
     <div v-if="!store.report" class="empty">
       <div class="empty__icon">📦</div>
-      <div>还没有扫描数据</div>
-      <div class="hint">
-        点击右上角「开始扫描」。首次扫描只读取目录，勾选「统计包体积」会额外遍历每个包目录，速度较慢。
-      </div>
+      <div>{{ t('packages.emptyTitle') }}</div>
+      <div class="hint">{{ t('packages.emptyHint') }}</div>
     </div>
 
     <div v-else-if="rows.length === 0" class="empty">
       <div class="empty__icon">🔍</div>
-      <div>没有匹配的包</div>
-      <div class="hint">试试清空搜索关键字，或切换到「全部」范围。</div>
+      <div>{{ t('packages.noMatch') }}</div>
+      <div class="hint">{{ t('packages.noMatchHint') }}</div>
     </div>
 
-    <!-- 表格 -->
+    <!-- 列表 -->
     <div v-else class="panel">
       <div class="table-wrap" style="max-height: calc(100vh - 250px)">
-        <table class="data">
+        <table class="data pkg-table">
           <thead>
             <tr>
-              <th class="is-sortable" @click="toggleSort('name')">包名{{ sortIndicator('name') }}</th>
-              <th class="is-sortable" style="width: 130px" @click="toggleSort('version')">
-                版本{{ sortIndicator('version') }}
+              <th class="is-sortable" @click="toggleSort('name')">
+                {{ t('packages.name') }} / {{ t('packages.version') }}{{ sortIndicator('name') }}
               </th>
-              <th class="is-sortable" style="width: 96px" @click="toggleSort('manager')">
-                来源{{ sortIndicator('manager') }}
+              <th
+                v-if="store.measuredBytes > 0"
+                class="is-sortable num"
+                style="width: 96px"
+                @click="toggleSort('size')"
+              >
+                {{ t('packages.size') }}{{ sortIndicator('size') }}
               </th>
-              <th style="width: 84px">作用域</th>
-              <th class="is-sortable num" style="width: 92px" @click="toggleSort('size')">
-                体积{{ sortIndicator('size') }}
-              </th>
-              <th>安装路径</th>
-              <th style="width: 62px" />
+              <th style="width: 84px" />
             </tr>
           </thead>
           <tbody>
             <tr
               v-for="p in rows"
-              :key="`${p.manager}:${p.name}:${p.version}:${p.path}`"
+              :key="`${p.manager}:${p.name}:${p.version}`"
               :class="{ 'is-redundant': p.redundant }"
+              @contextmenu.prevent="openMenu(p, $event)"
             >
-              <td :title="p.description ?? p.name">
-                {{ p.name }}
-                <span v-if="p.redundant" class="tag tag--warn" style="margin-left: 6px">旧版本</span>
-              </td>
-              <td class="mono">{{ p.version ?? '—' }}</td>
-              <td><span class="tag">{{ p.manager }}</span></td>
+              <!-- 只展示「包名 + 版本」：版本紧跟包名，避免被挤出可视区 -->
               <td>
-                <span class="tag" :class="p.scope === 'global' ? 'tag--accent' : ''">
-                  {{ SCOPE_LABELS[p.scope] }}
-                </span>
+                <div class="pkg-cell">
+                  <img
+                    v-if="settings.settings.showIcons && p.icon"
+                    class="pkg-icon"
+                    :src="p.icon"
+                    alt=""
+                    loading="lazy"
+                  />
+                  <span v-else class="pkg-icon pkg-icon--fallback">
+                    {{ p.name.replace(/^@[^/]+\//, '').charAt(0).toUpperCase() }}
+                  </span>
+                  <span class="pkg-cell__name" :title="p.description ?? p.name">{{ p.name }}</span>
+                  <span class="pkg-cell__version mono">{{ p.version ?? '—' }}</span>
+                  <span v-if="p.redundant" class="tag tag--warn">{{ t('packages.redundantMark') }}</span>
+                </div>
               </td>
-              <td class="num">{{ p.size === null ? '—' : formatBytesShort(p.size) }}</td>
-              <td class="path-cell" :title="p.path ?? ''">{{ ellipsisPath(p.path, 56) }}</td>
+              <td v-if="store.measuredBytes > 0" class="num">
+                {{ p.size === null ? '—' : formatBytesShort(p.size) }}
+              </td>
               <td>
-                <button class="btn btn--ghost btn--sm" @click="selected = p">详情</button>
+                <button class="btn btn--ghost btn--sm" @click="openDetail(p)">
+                  {{ t('detail.title') }}
+                </button>
               </td>
             </tr>
           </tbody>
@@ -147,42 +166,20 @@ async function copyPath(path: string | null) {
       </div>
     </div>
 
-    <!-- 详情抽屉（简化版弹层） -->
-    <div v-if="selected" class="modal-backdrop" @click.self="selected = null">
-      <div class="modal" style="width: min(720px, 100%)">
-        <div class="modal__head">
-          <div class="modal__title">{{ selected.name }}</div>
-          <span class="tag">{{ selected.manager }}</span>
-          <span class="tag">{{ SCOPE_LABELS[selected.scope] }}</span>
-          <button class="btn btn--ghost btn--sm" @click="selected = null">✕</button>
-        </div>
-        <div class="modal__body">
-          <div class="kv">
-            <span class="kv__k">版本</span>
-            <span class="kv__v">{{ selected.version ?? '—' }}</span>
-            <span class="kv__k">安装路径</span>
-            <span class="kv__v">{{ selected.path ?? '未识别' }}</span>
-            <span class="kv__k">体积</span>
-            <span class="kv__v">{{ selected.size === null ? '未统计' : formatBytesShort(selected.size) }}</span>
-            <span class="kv__k">描述</span>
-            <span class="kv__v">{{ selected.description ?? '—' }}</span>
-            <span v-if="selected.redundant" class="kv__k">冗余原因</span>
-            <span v-if="selected.redundant" class="kv__v danger-text">
-              {{ selected.redundantReason }}
-            </span>
-          </div>
-          <p class="hint" style="margin-top: 12px">
-            本工具只读取包信息，不会卸载任何包。若要移除旧版本，请使用包管理器自身的
-            <code>uninstall</code> 命令；「清理缓存」只会删除下载缓存。
-          </p>
-        </div>
-        <div class="modal__foot">
-          <button class="btn" :disabled="!selected.path" @click="copyPath(selected.path)">
-            复制路径
-          </button>
-          <button class="btn btn--primary" @click="selected = null">关闭</button>
-        </div>
-      </div>
-    </div>
+    <p class="hint" style="margin-top: 8px">
+      提示：在包上<strong>右键</strong>可以打开管理菜单（更新 / 卸载 / 安装为占位按钮，会给出等价官方命令）。
+    </p>
+
+    <PackageContextMenu
+      v-if="menuState"
+      :record="menuState.record"
+      :x="menuState.x"
+      :y="menuState.y"
+      @close="menuState = null"
+      @inspect="openDetail"
+      @manage="openDetail"
+    />
+
+    <PackageDetailDrawer :record="detailTarget" @close="detailTarget = null" />
   </section>
 </template>

@@ -1,50 +1,139 @@
 # PackInspect
 
-本机包环境扫描工具。扫描 pip / npm / pnpm / yarn / bun / uv / cargo / go / gem 的已安装包、
-全局与项目局部包、缓存目录占用、镜像源配置；支持导出报告与**安全清理缓存**。
-
-技术栈：**Vue 3 + TypeScript + Vite** 前端，**Tauri v2 (Rust)** 桌面外壳。
+本机包环境扫描工具。检测多种包管理器、列出已安装包、统计缓存占用、读写镜像源配置、
+导出报告，并提供**安全的缓存清理**。技术栈：**Vue 3 + TypeScript + Vite** 前端，
+**Tauri v2 (Rust)** 桌面外壳，自绘无边框窗口。
 
 ---
 
-## 1. 安全模型（最重要的一节）
+## 1. 一键启动
+
+双击仓库根目录的 **`启动 PackInspect.cmd`** 即可。它会自动：
+
+1. 缺 `node_modules` 时先跑 `npm install`
+2. 最小化窗口启动 Vite devServer（端口 1420）
+3. 轮询端口直到可连接
+4. 调用 `scripts\build.ps1 run` 编译并打开桌面应用
+
+关闭应用窗口即退出（devServer 需手动结束，或直接关机重启即可）。
+
+### 手动启动（开发时更常用）
+
+```cmd
+:: 1. 起前端 devServer（固定 1420，日志 vite-dev.log）
+tauri-vite.cmd
+
+:: 2. 编译并启动应用（日志 app-run.log）
+scripts\build.ps1 run
+```
+
+> **为什么不用 `npm run tauri:dev`**：Tauri CLI 会执行 `tauri.conf.json` 里的
+> `build.beforeDevCommand`（`npm run dev`），该命令依赖 `npm` 垫片，在非交互 shell
+> 或 PATH 不含 npm 时会直接失败并中断构建。直接 `cargo run` 等效且少一层依赖 ——
+> Tauri 二进制会自己读取 `build.devUrl` 连接已运行的 Vite。
+>
+> ⚠️ 所有 `.cmd` 文件**必须保持纯 ASCII**。`cmd.exe` 按控制台 OEM 代码页解析脚本，
+> 非 ASCII 字符会破坏行结构（中文注释会导致脚本整体解析失败）—— 这是实际踩过的坑。
+
+### 构建脚本
+
+`scripts/build.ps1` 会自行补齐 cargo 路径与 MSVC 环境（含把 vcvars 的 PATH **合并**
+而不是替换，否则会丢掉 nodejs/python 目录）：
+
+```powershell
+./scripts/build.ps1 check      # cargo check --all-targets（最快，不链接）
+./scripts/build.ps1 test       # cargo test --lib
+./scripts/build.ps1 clippy     # cargo clippy --all-targets
+./scripts/build.ps1 run        # 编译并启动桌面应用
+./scripts/build.ps1 test -- <用例名> --nocapture   # 透传给 cargo
+```
+
+### 功能自检
+
+应用启动后，在 WebView 控制台执行（需要开启 devtools）可跑一遍核心链路：
+
+```js
+await import('/scripts/smoke.ts')
+```
+
+它会真实调用 IPC，验证探测 / 扫描 / 管理动作 / 包内子节点 / 图标 / 设置往返 /
+链接白名单拦截，并把结果打印出来。
+
+---
+
+## 2. 界面结构
+
+```
+自绘标题栏（拖拽 + 最小化/最大化/关闭 + 扫描状态）
+├── 左侧导航：包管理 / 已安装包 / 缓存占用 / 镜像源 / 设置
+│   └── 切到「已安装包」时展开：全部 + 按语言生态分组的包管理器过滤
+├── 主区：工具栏（扫描 / 重新探测 / 清理缓存 / 统计体积）+ 提示区 + 视图
+└── 状态栏：主机、扫描时间、包数、缓存占用、当前范围
+```
+
+默认落地页是**包管理**：一张管理器一张卡片，已检测到的显示版本 / 全局目录 / 缓存目录 /
+包数量与「管理此管理器」，未检测到的显示「未检测到」+「前往官网下载」。
+
+**已安装包**列表按要求只展示「包名 + 版本」（勾选「统计包体积」后多一列体积），
+每个包前面是彩色首字母图标；**在包上右键**打开管理菜单。
+
+---
+
+## 3. 安全模型（最重要的一节）
 
 | 约束 | 实现位置 |
 |---|---|
-| 前端不执行 shell、不读文件系统 | 不启用 Tauri shell 插件；`src-tauri/capabilities/default.json` 只授予 `core:default` 与 dialog 权限 |
-| 命令必须走白名单 | `src-tauri/src/whitelist.rs` → `MANAGERS[].ops` 定义每个 (manager, op) 的**静态参数数组** |
+| 前端不执行 shell、不读文件系统 | 不启用 Tauri shell 插件；`capabilities/default.json` 只授予 `core:window` 与 dialog 权限 |
+| 命令必须走白名单 | `whitelist.rs` → `MANAGERS[].ops` 定义每个 (manager, op) 的**静态参数数组** |
 | 前端不能传命令行 | IPC 只接收 `manager id` / `op` / 绝对路径；Rust 侧拼装参数 |
-| 动态值必须校验 | `src-tauri/src/validate.rs`：包名、URL、配置键、路径逐项校验 |
-| 清理不能越界 | `validate::ensure_within()` 保证目标严格位于缓存根之内，且拒绝 `..`、软链接逃逸、关键系统路径 |
-| 不卸载任何包 | 全项目无 `uninstall` 调用；清理白名单只有 cache / temp / oldversion（旧版本仅对全局 node 包） |
+| 动态值必须校验 | `validate.rs`：包名、URL、配置键、路径逐项校验 |
+| 清理不能越界 | `validate::ensure_within()` 保证目标严格位于缓存根之内，拒绝 `..`、软链接逃逸、关键系统路径 |
+| 不卸载任何包 | 全项目无 `uninstall` 调用，`actions.rs` 里所有破坏性动作 `enabled = false` |
 | 清理必须二次确认 | `CleanDialog.vue` 三段式：勾选 → dry-run 预览 → 二次确认（≥1GB 需手打 `DELETE`） |
 | 写配置前备份 | `registry::write()` 先写 `*.bak-<时间戳>`，再原子替换（写 `.tmp` + rename） |
+| 打开链接受控 | `settings::check_url()`：仅 https + 域名白名单；`kind = manager` 时由后端取官网地址，前端无法自带 URL |
+| 不联网抓图标 | 图标由后端按包名哈希生成内联 SVG（`icons.rs`），离线可用、无 CSP 冲突 |
 
-## 2. 目录结构
+**关于更新 / 卸载 / 安装**：这三个动作会改动用户的真实环境，且包管理器的交互提示
+（确认、依赖冲突、权限）无法在后台管道里可靠完成。因此一期它们**只是占位按钮**：
+右键菜单里显示为灰色 + `占位` 标签，鼠标悬停会给出**等价的官方命令**供用户自行执行。
+「管理此包」「查看安装详情」「打开包主页」则是真正可用的。
+
+---
+
+## 4. 目录结构
 
 ```
 packInspect/
-├─ index.html
-├─ package.json / vite.config.ts / tsconfig.json
+├─ 启动 PackInspect.cmd          # 一键启动
+├─ tauri-vite.cmd / tauri-run.cmd / tauri-dev.cmd
+├─ scripts/
+│  ├─ build.ps1                  # 构建/测试入口（自动注入 cargo + MSVC 环境）
+│  └─ smoke.ts                   # 功能自检脚本（WebView 控制台里跑）
 ├─ src/                          # 前端（WebView 内运行，无系统权限）
 │  ├─ main.ts / App.vue
-│  ├─ api/index.ts               # Tauri IPC 封装（前端与系统的唯一通道）
-│  ├─ types/index.ts             # 与 Rust models.rs 一一对应的类型镜像
-│  ├─ stores/app.ts              # Pinia：扫描结果、清理状态机、日志
-│  ├─ utils/format.ts            # 体积/时间/路径格式化
-│  ├─ styles/theme.css           # 深色主题（变量集中在 :root）
-│  ├─ components/                # NavSidebar / StatusBar / GlobalBanner / CleanDialog
-│  └─ views/                     # PackagesView / CacheView / RegistryView / ReportView
+│  ├─ api/index.ts               # 唯一 IPC 通道
+│  ├─ types/index.ts             # 与 Rust models.rs 严格镜像
+│  ├─ i18n/index.ts              # 中英文案 + t() 插值
+│  ├─ stores/app.ts              # 扫描结果、右键菜单缓存、清理状态机
+│  ├─ stores/settings.ts         # 语言 / 主题 / 启动行为
+│  ├─ styles/theme.css           # 深色 + 浅色主题变量
+│  ├─ components/                # TitleBar / NavSidebar / StatusBar / GlobalBanner
+│  │                             # PackageContextMenu / PackageDetailDrawer / CleanDialog
+│  └─ views/                     # ManagerView / PackagesView / CacheView
+│                                # RegistryView / SettingsView / ReportView
 └─ src-tauri/                    # 后端（唯一有系统权限的一侧）
-   ├─ Cargo.toml / build.rs / tauri.conf.json
-   ├─ capabilities/default.json  # 权限清单
-   ├─ icons/                     # 占位图标（建议用 `npx tauri icon` 重新生成）
+   ├─ Cargo.toml / build.rs / tauri.conf.json / capabilities/default.json
    └─ src/
       ├─ main.rs / lib.rs        # 入口 + command 注册
       ├─ commands.rs             # Tauri command 层（spawn_blocking 包装）
-      ├─ report.rs               # 扫描编排 + 报告导出（JSON/CSV/Markdown）
-      ├─ manager.rs              # 管理器探测：可执行文件/版本/全局根/缓存目录
-      ├─ packages.rs             # 已安装包枚举 + 冗余旧版本识别
+      ├─ report.rs               # 扫描编排 + 报告导出
+      ├─ manager.rs              # 探测：可执行文件/版本/全局根/缓存目录
+      ├─ packages.rs             # 各生态的已安装包枚举
+      ├─ actions.rs              # 右键管理动作 + 包主页 URL
+      ├─ plugins.rs              # 包内子节点（插件/依赖/文件）
+      ├─ icons.rs                # 内联 SVG 图标生成 + 缓存
+      ├─ settings.rs             # 设置持久化 + 受控打开链接
       ├─ cleaner.rs              # 清理候选枚举 + 安全删除
       ├─ registry.rs             # 镜像源读取/解析/备份写回
       ├─ executor.rs             # 命令解析与超时执行（唯一 spawn 点）
@@ -58,139 +147,134 @@ packInspect/
 依赖方向自上而下，下层不反向依赖上层：
 
 ```
-commands → report → manager · packages · cleaner · registry
-                  → executor · validate · whitelist · fsutil → models · error
+commands → report · actions · plugins · settings
+         → manager · packages · cleaner · registry
+         → executor · validate · whitelist · fsutil · icons → models · error
 ```
 
-## 3. 环境要求
+---
 
-- **Node.js** ≥ 18（前端构建；实测 Node 24 通过）
-- **Rust** ≥ 1.77.2 + `cargo`（实测 1.99.0 通过）
-- **Windows**：需安装 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（MSVC 链接器）。
-  命令行调用 `cargo` 前需先执行 `vcvars64.bat`，或在「Developer PowerShell for VS」中操作。
+## 5. 环境要求
+
+- **Node.js** ≥ 18（实测 24.16.0）
+- **Rust** ≥ 1.77.2 + `cargo`（实测 1.99.0）
+- **Windows**：需 [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)。
+  `scripts/build.ps1` 会自动用 `vswhere` 定位并注入环境；命令行手动调用 cargo 时
+  需先跑 `vcvars64.bat` 或在「Developer PowerShell for VS」里操作。
 - **WebView2**：Windows 10/11 通常已内置
 
 ### 网络受限时
 
-`rustup` / `cargo` 首次拉取依赖较慢，可用镜像或本地代理：
-
 ```powershell
-# 方式一：本地代理（如 Clash 监听 7890）
+# 本地代理（如 Clash 监听 7890）—— build.ps1 已默认设置
 $env:HTTP_PROXY  = 'http://127.0.0.1:7890'
 $env:HTTPS_PROXY = 'http://127.0.0.1:7890'
 
-# 方式二：字节 rsproxy 镜像
+# 或字节 rsproxy 镜像
 $env:RUSTUP_DIST_SERVER = 'https://rsproxy.cn'
 $env:RUSTUP_UPDATE_ROOT = 'https://rsproxy.cn/rustup'
-
-# cargo 依赖走镜像（写入 ~/.cargo/config.toml）
-# [source.crates-io]
-# replace-with = 'rsproxy-sparse'
-# [source.rsproxy-sparse]
-# registry = "sparse+https://rsproxy.cn/index/"
 ```
 
-`rustup toolchain install` 在慢速网络下可能长时间停在 `.partial` 文件上；加代理后重跑会自动从中断处恢复。
+`rustup toolchain install` 在慢速网络下可能长时间停在 `.partial` 文件上；
+加代理后重跑会从中断处恢复。
 
-## 4. 开发
+---
 
-### 推荐：使用启动脚本（Windows，非交互环境友好）
+## 6. 支持的包管理器
 
-仓库根目录提供三个 `.cmd` 启动器。它们会自行补齐 cargo 路径与 MSVC 环境，
-不依赖当前 shell 的 PATH，因此可直接双击或从任意终端调用：
+### 一期（已接入扫描，真实可用）
 
-```cmd
-:: 1. 先起前端 devServer（固定 1420，日志 vite-dev.log）
-tauri-vite.cmd
+| id | 语言 | 全局包识别方式 | 缓存目录 | 镜像源 |
+|---|---|---|---|---|
+| `npm` | Node.js | `npm root -g` + 扫 package.json，兜底 `ls -g --json` | `%LOCALAPPDATA%\npm-cache` | ✅ |
+| `pnpm` | Node.js | `pnpm root -g` | `%LOCALAPPDATA%\pnpm\store` | ✅ |
+| `yarn` | Node.js | `yarn global dir` | `%LOCALAPPDATA%\Yarn\Cache` | ✅ |
+| `pip` | Python | `pip list --format=json` + dist-info 定位 | `%LOCALAPPDATA%\pip\Cache` | ✅ |
+| `cargo` | Rust | `cargo install --list` | `~/.cargo/registry` | ✅ |
+| `dotnet` | .NET | 扫 `~/.nuget/packages/<Id>/<Version>` | `%LOCALAPPDATA%\NuGet\v3-cache` | — |
+| `winget` | Windows | `winget list`（按表头列位切分定宽表格） | `%LOCALAPPDATA%\Microsoft\WinGet` | — |
 
-:: 2. 再起桌面应用（编译 Rust 并打开窗口，日志 app-run.log）
-tauri-run.cmd
-```
+### 二期（探测已接入，扫描逻辑开发中）
 
-> **为什么不用 `npm run tauri:dev`**：Tauri CLI 会执行 `tauri.conf.json` 里的
-> `build.beforeDevCommand`（即 `npm run dev`），该命令依赖 `npm` 垫片；
-> 在非交互 shell / 无 npm 的 PATH 下会直接失败并中断构建。
-> `tauri-run.cmd` 改为直接 `cargo run`：Tauri 二进制本身会读取 `build.devUrl`
-> 连接已运行的 Vite，效果等价且少一层依赖。
->
-> 另有 `tauri-dev.cmd`（走 Tauri CLI）。它同样会触发 `beforeDevCommand`，因此**必须先在
-> PATH 里能找到 `npm`**，并已在运行 `tauri-vite.cmd`，否则会因端口冲突或找不到 npm 而失败。
-> 若你在「Developer PowerShell for VS」这类环境里 `npm` 可用，`npm run tauri:dev` 也可以。
->
-> ⚠️ 三个 `.cmd` 文件**必须保持纯 ASCII**：`cmd.exe` 按控制台 OEM 代码页解析脚本，
-> 非 ASCII 字符会破坏行结构（中文注释会导致脚本整体解析失败）。
+`powershellget`（`Get-Module -ListAvailable`）、`composer`、`gem`、`go`（GOMODCACHE）、
+`maven`（`.m2/repository`）
 
-### 直接用 npm 脚本
+### 三期（探测已接入，扫描逻辑规划中）
 
-```bash
-npm install            # 安装前端依赖
-npm run typecheck      # vue-tsc 类型检查
-npm run dev            # 只跑前端（浏览器里看不到数据，IPC 不可用）
-npm run tauri:dev      # 完整桌面应用（需 npm 在 PATH 中）
-npm run tauri:build    # 打包安装程序（NSIS）
-```
+`chocolatey`、`scoop`、`conda`、`dart`（pub）、`luarocks`、`cpan`
 
-## 5. 后端命令清单（前端可调用的全部 IPC）
+> 二期 / 三期管理器的扫描函数已写好并接入 `report.rs` 的分发，但**尚未在真实环境
+> 逐一验证**（本机没有安装这些管理器）。在管理页上它们会标为「后续支持」，
+> 已检测到的仍可点「管理此管理器」尝试扫描。
 
-| command | 作用 | 是否写操作 |
+新增一个管理器：在 `whitelist.rs` 的 `MANAGERS` 加一条定义 → 在 `packages.rs`
+补该生态的枚举函数 → 在 `report.rs` 的 `collect_packages` 加一个分支。
+前端无需改动（侧边栏与表格完全数据驱动）。
+
+---
+
+## 7. 后端命令清单
+
+| command | 作用 | 写操作 |
 |---|---|---|
 | `supported_managers` | 静态列出支持的管理器与允许的操作 | 否 |
-| `detect_managers` | 探测可执行文件/版本/全局目录/缓存目录 | 否（结果缓存 5 分钟） |
+| `detect_managers` | 探测可执行文件/版本/全局目录/缓存目录 | 否（缓存 5 分钟） |
+| `install_hints` | 未检测到的管理器 + 官方下载入口 | 否 |
 | `get_registry` / `get_all_registries` | 读取镜像源配置 | 否 |
 | `preview_registry_change` | 预览保存后的配置文件内容 | 否 |
 | `set_registry` | 写回镜像源（先备份） | **是** |
 | `run_scan` | 完整扫描，返回报告 | 否 |
-| `get_cache_stats` | 单个管理器的缓存占用 + 一级子目录分布 | 否 |
+| `get_cache_stats` | 单管理器缓存占用 + 一级子目录分布 | 否 |
+| `package_icon` | 取包图标（后端缓存） | 否 |
+| `package_actions` | 取右键管理动作（含占位标记与等价命令） | 否 |
+| `package_plugins` | 展开包内子节点 | 否 |
 | `list_clean_candidates` | 枚举清理候选 | 否 |
 | `clean_caches` | 清理；`dryRun` 默认 `true` | **是**（`dryRun=false` 时） |
 | `export_report` | 导出 JSON / CSV / Markdown | **是**（写新文件） |
+| `open_external_link` | 用系统浏览器打开（https + 域名白名单） | 否 |
+| `get_settings` / `save_settings` | 读写设置 | **是**（保存时） |
 | `get_diagnostics` / `parent_dir` | 环境信息 / 取父目录 | 否 |
 
-## 6. 已支持的包管理器
-
-| id | 语言 | 全局包识别方式 | 缓存目录 |
-|---|---|---|---|
-| `npm` | Node.js | `npm root -g` + 扫描目录下 package.json | `%LOCALAPPDATA%\npm-cache` |
-| `pnpm` | Node.js | `pnpm root -g` | `%LOCALAPPDATA%\pnpm\store` |
-| `yarn` | Node.js | `yarn global dir` | `%LOCALAPPDATA%\Yarn\Cache` |
-| `bun` | Node.js | 扫描 `~/.bun/install/global/node_modules` | `~/.bun/install/cache` |
-| `pip` | Python | `pip list --format=json` + dist-info 定位 | `%LOCALAPPDATA%\pip\Cache` |
-| `uv` | Python | `uv pip list --format=json` | `%LOCALAPPDATA%\uv` |
-| `cargo` | Rust | `cargo install --list` | `~/.cargo/registry` |
-| `go` | Go | 扫描 `GOMODCACHE`（`module@version`） | `~/go/pkg/mod` |
-| `gem` | Ruby | `gem list --local` | `~/.gem` |
-
-新增一个管理器只需在 `whitelist.rs` 的 `MANAGERS` 里加一条定义，并在 `packages.rs` /
-`manager.rs` 里补该生态的解析分支；前端无需改动（侧边栏与表格按数据驱动渲染）。
-
-## 7. 已知限制
-
-- 项目**局部包**扫描尚未实现：当前 `scope` 只产出 `global`（pip/npm 全局）与 `system`（解释器基础环境）。
-  规划中的实现是在用户指定根目录内向上查找 `package-lock.json` / `pyproject.toml` 等标记文件。
-- 「最新版本」比对未实现（`latestVersion` 字段恒为 `null`），因为需要联网查询仓库元数据。
-- 缓存体积统计对超大目录（如 Go module cache）会触发 `MAX_SCAN_ENTRIES` 截断，此时 `truncated = true`。
-- 清理受保护项：pnpm store、uv cache、cargo registry、Go mod cache 的内容寻址/巨大目录默认
-  只允许清理其下的缓存子目录；pnpm/cargo/uv/go 的整个存储根不可一键删除（避免破坏项目硬链接）。
-- `src-tauri/icons/` 内为脚本生成的占位图标，正式发布前请用 `npx tauri icon <你的 1024px 图>` 替换。
+---
 
 ## 8. 测试
 
 ```bash
-cd src-tauri && cargo test    # 覆盖：输入校验/路径逃逸/白名单/cache 解析/CSV 与 JSON 解析
-npm run typecheck             # 前端类型与数据契约校验
+scripts\build.ps1 test          # Rust：54 个用例
+npm run typecheck               # 前端类型与数据契约校验
 ```
 
-安全相关的单元测试集中在 `validate.rs`（注入攻击、路径逃逸）、`whitelist.rs`（未知操作被拒）、
-`cleaner.rs`（禁止目录名、候选 id 稳定性、dry-run 无副作用）。
+安全相关用例集中在 `validate.rs`（注入攻击、路径逃逸）、`executor.rs`
+（PATH 解析回退、超时不失控）、`whitelist.rs`（未知操作被拒、一期覆盖完整）、
+`cleaner.rs`（禁止目录名、候选 id 稳定、dry-run 无副作用）、`actions.rs`
+（破坏性动作必须禁用、包主页 URL 只指向已知仓库）、`settings.rs`
+（链接白名单、设置合法性）。
 
-### 当前验证状态
+### 验证状态
 
 | 项目 | 命令 | 结果 |
 |---|---|---|
-| Rust 编译（含测试目标） | `cargo check --all-targets` | ✅ 通过，0 告警 |
-| Rust 单元测试 | `cargo test --lib` | ✅ 26 passed / 0 failed（含对已安装管理器的端到端命令执行） |
-| 前端类型检查 | `npx vue-tsc --noEmit` | ✅ 通过 |
-| 前端生产构建 | `npx vite build` | ✅ 通过（JS 113 KB / gzip 42 KB） |
+| Rust 编译（含测试目标） | `cargo check --all-targets` | ✅ 0 告警 |
+| Rust 单元测试 | `cargo test --lib` | ✅ 54 passed / 0 failed |
+| 前端类型检查 | `vue-tsc --noEmit` | ✅ 通过 |
+| 前端生产构建 | `vite build` | ✅ 通过 |
+| 应用实际启动 | `build.ps1 run` | ✅ 窗口正常，探测到 5/7 一期管理器，扫描出 505 个包 / 1.91 GB 缓存 |
+| 包列表 / 图标 / 右键菜单 | 截图人工核对 | ✅ 见 §2 |
+| 设置页（语言 / 主题） | 截图人工核对 | ✅ 渲染正常 |
 
-尚未验证：`npm run tauri:dev` 的完整窗口启动与真实 GUI 交互、`npm run tauri:build` 打包安装程序
-（需要 WebView2 运行时与更长时间的首轮 release 编译）。
+尚未验证：二期 / 三期管理器的真实扫描结果、浅色主题下的逐项视觉走查、
+`npm run tauri:build` 打包安装程序。
+
+---
+
+## 9. 已知限制
+
+- **项目局部包**扫描未实现：`scope` 目前只有 `global` 与 `system`。
+  规划中的做法是在用户指定根目录内向上查找 `package-lock.json` / `pyproject.toml` 等标记文件。
+- **「最新版本」比对未实现**（`latestVersion` 恒为 `null`），需要联网查询仓库元数据。
+- 缓存体积统计对超大目录会触发 `MAX_SCAN_ENTRIES` 截断，此时 `truncated = true`。
+- pnpm store、cargo registry、Go mod cache、NuGet 全局包目录为**内容寻址/共享**结构，
+  删除会破坏已有项目，因此这些根目录本身不可一键删除，只允许清理其下的缓存子目录。
+- `src-tauri/icons/` 是脚本生成的占位图标，正式发布前用 `npx tauri icon <1024px 图>` 替换。
+- 本工具的**图标是本地生成的字母图标**，不是各包的真实 logo。这是刻意取舍：
+  抓 favicon 需要给 WebView 放行任意域名，与安全约束冲突，且离线环境必然空白。

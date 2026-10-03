@@ -4,25 +4,29 @@
 //! ```text
 //! commands  ← Tauri IPC 边界，前端唯一入口
 //!    │
-//! report    ← 扫描编排 / 报告导出
+//! report · actions · plugins · settings   ← 业务编排
 //!    │
-//! manager · packages · cleaner · registry   ← 业务能力
+//! manager · packages · cleaner · registry ← 能力层
 //!    │
-//! executor · validate · whitelist · fsutil  ← 安全底座
+//! executor · validate · whitelist · fsutil · icons  ← 安全底座
 //!    │
-//! models · error                            ← 数据结构
+//! models · error                          ← 数据结构
 //! ```
 
+pub mod actions;
 pub mod cleaner;
 pub mod commands;
 pub mod error;
 pub mod executor;
 pub mod fsutil;
+pub mod icons;
 pub mod manager;
 pub mod models;
 pub mod packages;
+pub mod plugins;
 pub mod registry;
 pub mod report;
+pub mod settings;
 pub mod validate;
 pub mod whitelist;
 
@@ -32,19 +36,32 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
+            // 基础探测与扫描
             commands::supported_managers,
             commands::detect_managers,
+            commands::run_scan,
+            commands::get_cache_stats,
+            // 镜像源
             commands::get_registry,
             commands::get_all_registries,
             commands::set_registry,
             commands::preview_registry_change,
-            commands::run_scan,
-            commands::get_cache_stats,
+            // 清理
             commands::list_clean_candidates,
             commands::clean_caches,
+            // 报告与诊断
             commands::export_report,
             commands::get_diagnostics,
             commands::parent_dir,
+            // 包管理：图标 / 动作 / 包内子节点 / 下载引导
+            commands::package_icon,
+            commands::package_actions,
+            commands::package_plugins,
+            commands::install_hints,
+            // 外部链接与设置
+            commands::open_external_link,
+            commands::get_settings,
+            commands::save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("启动 PackInspect 失败");
@@ -70,6 +87,22 @@ mod integration_tests {
                 def.id,
                 out.failure_hint()
             );
+        }
+    }
+
+    /// 一期管理器的「列表」操作必须也能被安全执行（未安装则跳过）
+    #[test]
+    fn tier1_list_ops_are_executable() {
+        for id in whitelist::tier1_ids() {
+            let def = whitelist::find(id).unwrap();
+            let Some(exe) = executor::resolve_executable(def.exe_candidates) else { continue };
+            let Some(args) = whitelist::op_args(id, "listGlobal") else {
+                panic!("{id} 缺少 listGlobal 操作");
+            };
+            let req = ExecRequest::new(exe.to_string_lossy().to_string(), args).with_timeout_ms(25_000);
+            let out = executor::run_resolved(&exe, &req).expect("执行不应 panic");
+            // 只要没超时且没被拒绝即可；即使返回非零也应由上层兜底到磁盘扫描
+            assert!(!out.timed_out || out.success, "{id} 的列表命令超时");
         }
     }
 }

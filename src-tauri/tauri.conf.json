@@ -12,15 +12,17 @@
   "app": {
     "windows": [
       {
-        "title": "PackInspect — 本地包环境扫描",
+        "title": "PackInspect",
         "width": 1360,
         "height": 860,
         "minWidth": 1024,
         "minHeight": 640,
         "resizable": true,
         "theme": "Dark",
-        "decorations": true,
-        "center": true
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true
       }
     ],
     "security": {

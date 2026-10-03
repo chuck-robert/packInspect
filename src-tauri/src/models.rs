@@ -13,8 +13,10 @@ pub struct ManagerInfo {
     pub id: String,
     /// 展示名，如 "npm"
     pub name: String,
-    /// 所属语言生态：node / python / rust / go ...
+    /// 所属语言生态：node / python / rust / dotnet / windows ...
     pub language: String,
+    /// 优先级阶段：1 = 一期可用，2/3 = 后续阶段（界面弱化展示）
+    pub tier: u8,
     /// 是否在本机检测到可执行文件
     pub detected: bool,
     /// `--version` 输出（已清理首行）
@@ -29,6 +31,9 @@ pub struct ManagerInfo {
     pub config_file: Option<String>,
     /// 当前镜像源配置
     pub registry: Option<RegistryConfig>,
+    /// 未安装时的下载入口
+    pub download_url: Option<String>,
+    pub docs_url: Option<String>,
     /// 探测过程中的非致命警告（例如版本命令超时）
     pub warnings: Vec<String>,
 }
@@ -57,6 +62,24 @@ pub struct RegistryEntry {
     pub hint: Option<String>,
 }
 
+/// 包内的「子节点」：插件、扩展、资源或运行时依赖。
+///
+/// 设计上刻意做成通用树节点，这样 npm 的插件、pip 的依赖、VS Code 扩展目录、
+/// NuGet 的包内容都能用同一套 UI 渲染，不必为每个生态单独建模。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginNode {
+    /// 节点类型：plugin | dependency | file | dir | runtime
+    pub node_type: String,
+    pub name: String,
+    pub version: Option<String>,
+    /// 安装路径（允许为空：部分来源无法定位）
+    pub path: Option<String>,
+    pub size: Option<u64>,
+    /// 补充说明，例如 "由 package.json 的 contributes 声明"
+    pub note: Option<String>,
+}
+
 /// 一个已安装的包
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,8 +99,51 @@ pub struct PackageRecord {
     /// 冗余原因说明
     pub redundant_reason: Option<String>,
     pub description: Option<String>,
-    /// 最新版本（来自仓库元数据，暂未实现则为 null）
+    /// 最新版本（来自仓库元数据，未查询时为 null）
     pub latest_version: Option<String>,
+    /// 包内子节点（插件 / 扩展 / 依赖）。按需加载，未加载时为空数组。
+    #[serde(default)]
+    pub plugins: Vec<PluginNode>,
+    /// 子节点是否已加载过 —— 用于区分「没有插件」与「还没查」
+    #[serde(default)]
+    pub plugins_loaded: bool,
+    /// 包图标：来自权威图标服务或本地生成的字母图标（data URI）
+    pub icon: Option<String>,
+}
+
+/// 包管理动作（右键菜单项）。
+///
+/// 重要：本工具**不替用户执行卸载/更新**。这里只把「该用什么命令」结构化地告诉界面，
+/// 一期这些按钮为占位状态，避免误操作破坏用户环境。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagementAction {
+    /// manage | update | uninstall | install | disable | openDocs | inspect
+    pub action: String,
+    pub label: String,
+    /// 是否需要联网
+    pub online: bool,
+    /// 是否具有破坏性（界面用红色标注）
+    pub destructive: bool,
+    /// 一期是否真正可用；false = 占位按钮
+    pub enabled: bool,
+    /// 等价命令（仅供参考展示，本工具不会执行）
+    pub command_hint: Option<String>,
+    /// 不可用原因
+    pub note: Option<String>,
+}
+
+/// 未安装管理器的引导信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallHint {
+    pub manager_id: String,
+    pub name: String,
+    pub language: String,
+    pub download_url: Option<String>,
+    pub docs_url: Option<String>,
+    /// 推荐安装方式（按平台给出）
+    pub install_hint: Option<String>,
 }
 
 /// 缓存目录统计
@@ -107,7 +173,7 @@ pub struct CacheChild {
 }
 
 /// 清理候选（一条 = 一个可删除的路径）
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanCandidate {
     /// 稳定 id：`{manager}:{kind}:{hash}`
@@ -118,7 +184,7 @@ pub struct CleanCandidate {
     pub bytes: u64,
     pub file_count: u64,
     pub reason: String,
-    /// 风险等级：safe 仅缓存 / warn 需注意
+    /// 风险等级：safe 仅缓存 / warn 需注意 / protected 禁止删除
     pub risk: String,
     /// 是否被安全策略硬性禁止删除（前端只能展示，不能勾选）
     pub protected: bool,
@@ -138,7 +204,7 @@ pub enum CleanKind {
 }
 
 /// 清理执行结果
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanResult {
     pub candidate_id: String,
@@ -215,4 +281,65 @@ pub struct ExportRequest {
     pub format: String,
     /// 目标文件绝对路径（由前端另存为对话框提供）
     pub target_path: String,
+}
+
+/// 打开外部链接的请求。
+///
+/// 安全设计：**不接受任意 URL**。前端只能提交「已知管理器 id」或「在允许列表内的 URL」，
+/// 由 Rust 侧解析成最终地址，避免被注入钓鱼链接。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenLinkRequest {
+    /// manager | docs | url
+    pub kind: String,
+    /// kind = manager 时为管理器 id；kind = url 时为完整地址
+    pub target: String,
+}
+
+/// 包内子节点查询请求
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginsRequest {
+    pub manager: String,
+    /// 已通过 `validate::package_name` 校验的包名
+    pub package: String,
+    pub version: Option<String>,
+    /// 安装路径（必须落在该管理器的全局根之内，由 Rust 侧复核）
+    pub path: Option<String>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// 应用设置（语言 / 主题）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    /// zh-CN | en-US
+    pub language: String,
+    /// dark | light | system
+    pub theme: String,
+    /// 是否在启动时自动扫描
+    pub scan_on_startup: bool,
+    /// 列表是否显示图标
+    pub show_icons: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            language: "zh-CN".to_string(),
+            theme: "dark".to_string(),
+            scan_on_startup: true,
+            show_icons: true,
+        }
+    }
+}
+
+/// 图标请求：返回 data URI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconResponse {
+    pub key: String,
+    pub data_uri: String,
+    /// 是否来自缓存
+    pub cached: bool,
 }

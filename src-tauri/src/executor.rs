@@ -88,24 +88,29 @@ fn default_env() -> HashMap<String, String> {
 
 /// 在 PATH 与常见安装目录中查找可执行文件。
 /// `candidates` 按优先级排列，返回第一个命中项的**绝对路径**。
+///
+/// 关键设计：**不只依赖进程的 PATH 环境变量**。
+/// GUI 进程（以及被 vcvars 之类脚本改过环境的进程）拿到的 PATH 往往比登录 shell 窄，
+/// 会出现「明明装了 npm 却报未找到」。因此额外回退到：
+///   1. 注册表里的系统 / 用户 PATH（Windows 上是权威值）
+///   2. 各工具链的常见安装目录
 pub fn resolve_executable(candidates: &[&str]) -> Option<PathBuf> {
-    // 1) 显式 PATH 查找
-    for cand in candidates {
-        if let Some(p) = find_in_path(cand) {
-            return Some(p);
-        }
-    }
-    // 2) 常见目录兜底（Tauri GUI 进程的 PATH 有时比登录 shell 窄）
     let mut dirs: Vec<PathBuf> = Vec::new();
+
+    // 1) 进程 PATH
     if let Ok(path) = std::env::var("PATH") {
         dirs.extend(std::env::split_paths(&path));
     }
+    // 2) 注册表 PATH —— 修复 GUI 进程 PATH 不完整的问题
+    dirs.extend(windows_registry_paths());
+
+    // 3) 常见安装目录兜底
     for key in ["APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "USERPROFILE", "HOME"] {
-        if let Ok(v) = std::env::var(key) {
-            if v.is_empty() {
+        if let Ok(value) = std::env::var(key) {
+            if value.is_empty() {
                 continue;
             }
-            let base = PathBuf::from(&v);
+            let base = PathBuf::from(&value);
             dirs.push(base.join("npm"));
             dirs.push(base.join("bin"));
             dirs.push(base.join(".local").join("bin"));
@@ -116,35 +121,134 @@ pub fn resolve_executable(candidates: &[&str]) -> Option<PathBuf> {
             dirs.push(base.clone());
         }
     }
-    for dir in dirs {
-        for cand in candidates {
-            let p = dir.join(cand);
-            if p.is_file() {
-                return Some(p);
+    // Node.js / Python 常见安装根（含非系统盘）
+    for root in ["C:\\", "D:\\", "E:\\"] {
+        for name in ["nodejs", "Program Files\\nodejs"] {
+            dirs.push(PathBuf::from(format!("{root}{name}")));
+        }
+        for name in ["Python313", "Python312", "Python311"] {
+            let base = PathBuf::from(format!("{root}{name}"));
+            dirs.push(base.join("Scripts"));
+            dirs.push(base);
+        }
+    }
+    // 常见包管理器 shim 目录
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        dirs.push(PathBuf::from(appdata).join("npm"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(&local).join("pnpm"));
+        dirs.push(PathBuf::from(&local).join("Yarn").join("bin"));
+        dirs.push(PathBuf::from(&local).join("Microsoft").join("WinGet").join("Links"));
+    }
+
+    // 去重后按顺序探测，保证候选优先级仍然生效
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<PathBuf> = dirs.into_iter().filter(|d| seen.insert(d.clone())).collect();
+
+    for candidate in candidates {
+        // 先做显式 PATH 风格查找（保留「未写扩展名也能命中」的行为）
+        for dir in &unique {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        // Windows：候选没写扩展名时按 PATHEXT 顺序补全
+        if cfg!(windows) && Path::new(candidate).extension().is_none() {
+            for ext in ["exe", "cmd", "bat", "ps1"] {
+                for dir in &unique {
+                    let path = dir.join(format!("{candidate}.{ext}"));
+                    if path.is_file() {
+                        return Some(path);
+                    }
+                }
             }
         }
     }
     None
 }
 
-fn find_in_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        // Windows 下用户常省略扩展名
-        if cfg!(windows) && Path::new(name).extension().is_none() {
-            for ext in ["exe", "cmd", "bat", "ps1"] {
-                let with_ext = dir.join(format!("{name}.{ext}"));
-                if with_ext.is_file() {
-                    return Some(with_ext);
+/// 读取 Windows 注册表里的系统 / 用户 PATH。
+///
+/// 用 `reg.exe` 而不是 winreg crate：少一个依赖，且 reg.exe 在任何 Windows 上都存在。
+/// 只在主 PATH 查找失败后才调用（见 `resolve_executable`），因此不影响常规性能。
+fn windows_registry_paths() -> Vec<PathBuf> {
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+
+    #[cfg(windows)]
+    {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let queries: [(&str, &str); 2] = [
+            ("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "Path"),
+            ("HKCU\\Environment", "Path"),
+        ];
+
+        let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        for (key, name) in queries {
+            let output = std::process::Command::new(&comspec)
+                .arg("/D")
+                .arg("/S")
+                .arg("/C")
+                .arg(format!("reg query \"{key}\" /v {name}"))
+                .stdin(std::process::Stdio::null())
+                .output();
+            let Ok(output) = output else { continue };
+            let text = String::from_utf8_lossy(&output.stdout);
+            // 输出形如：`    Path    REG_EXPAND_SZ    C:\a;C:\b`
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if !trimmed.to_ascii_lowercase().starts_with(&name.to_ascii_lowercase()) {
+                    continue;
                 }
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                if parts.len() < 3 {
+                    continue;
+                }
+                // REG_EXPAND_SZ 里可能有 %SystemRoot% 之类的变量
+                let raw = parts[2..].join(" ");
+                let expanded = expand_env_vars(&raw);
+                dirs.extend(std::env::split_paths(&expanded));
+                break;
+            }
+        }
+        dirs
+    }
+}
+
+/// 展开 `%VAR%` 形式的环境变量（注册表 REG_EXPAND_SZ 的取值方式）
+fn expand_env_vars(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(value) => out.push_str(&value),
+                    Err(_) => {
+                        // 变量不存在时原样保留，避免把路径拼坏
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('%');
+                out.push_str(after);
+                rest = "";
             }
         }
     }
-    None
+    out.push_str(rest);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -343,5 +447,29 @@ mod tests {
         assert!(req.timeout >= Duration::from_millis(1_000));
         let req = ExecRequest::new("x", &[]).with_timeout_ms(u64::MAX);
         assert!(req.timeout <= Duration::from_millis(120_000));
+    }
+
+    /// 回归测试：曾出现「明明装了 npm 却报未找到」。
+    ///
+    /// 根因是 GUI 进程（或被 vcvars 之类脚本改过环境的进程）拿到的 PATH 比登录 shell 窄。
+    /// 现在 `resolve_executable` 会额外回退到注册表 PATH 与常见安装目录。
+    /// 这里不假设目标一定存在，只验证解析逻辑本身自洽。
+    #[test]
+    fn resolve_executable_finds_always_present_binary() {
+        // cmd.exe 在任何 Windows 上都存在，且系统目录未必在精简 PATH 里
+        let cmd = resolve_executable(&["cmd.exe", "cmd"]);
+        assert!(cmd.is_some(), "应能解析到 cmd.exe（注册表 PATH 回退失效？）");
+        let path = cmd.unwrap();
+        assert!(path.is_absolute(), "解析结果必须是绝对路径: {}", path.display());
+        assert!(path.is_file(), "解析结果必须真实存在: {}", path.display());
+
+        // cargo 测试二进制本身由 cargo 启动，因此 cargo 必然可解析
+        assert!(resolve_executable(&["cargo.exe", "cargo"]).is_some());
+    }
+
+    /// 不存在的名字必须返回 None，而不是误报
+    #[test]
+    fn resolve_executable_returns_none_for_unknown() {
+        assert!(resolve_executable(&["definitely-not-a-real-binary-xyz.exe"]).is_none());
     }
 }

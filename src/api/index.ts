@@ -10,12 +10,20 @@
 import { invoke } from '@tauri-apps/api/core'
 import type {
   AppError,
+  AppSettings,
   CacheStats,
   CleanCandidate,
   CleanRequest,
   CleanResult,
   ExportRequest,
+  IconResponse,
+  InstallHint,
+  ManagementAction,
   ManagerInfo,
+  OpenLinkRequest,
+  PackageRecord,
+  PluginNode,
+  PluginsRequest,
   RegistryConfig,
   ScanReport,
   ScanRequest,
@@ -106,4 +114,43 @@ export const api = {
   diagnostics: () => call<Record<string, unknown>>('get_diagnostics'),
 
   parentDir: (path: string) => call<string>('parent_dir', { path }),
+
+  // ---------------------------------------------------------------- 包管理交互
+
+  /**
+   * 取包图标。后端返回内联 SVG data URI（离线生成，按包名哈希配色），
+   * 同一 (manager, package) 在后端有缓存，重复调用零成本。
+   */
+  packageIcon: (managerId: string, packageName: string) =>
+    call<IconResponse>('package_icon', { managerId, package: packageName }),
+
+  /**
+   * 取右键菜单的管理动作。
+   * 一期只有 manage / inspect / openDocs 可用；update / uninstall / install
+   * 会返回等价命令但 `enabled = false`（占位，不会真的执行）。
+   */
+  packageActions: (managerId: string, packageName: string, scope?: string) =>
+    call<ManagementAction[]>('package_actions', { managerId, package: packageName, scope }),
+
+  /** 展开包内子节点（插件 / 依赖 / 文件） */
+  packagePlugins: (request: PluginsRequest) => call<PluginNode[]>('package_plugins', { request }),
+
+  /** 未检测到的包管理器 + 官方下载入口 */
+  installHints: () => call<InstallHint[]>('install_hints'),
+
+  /**
+   * 用系统浏览器打开链接。
+   * kind = 'manager' 时由后端从白名单取官网地址，前端无法传任意 URL；
+   * kind = 'url' 时后端仍会校验 https + 域名白名单。
+   */
+  openExternalLink: (request: OpenLinkRequest) =>
+    call<string>('open_external_link', { request }),
+
+  // ---------------------------------------------------------------- 设置
+
+  getSettings: () => call<AppSettings>('get_settings'),
+
+  saveSettings: (settings: AppSettings) => call<string>('save_settings', { settingsData: settings }),
 }
+
+export type { PackageRecord }

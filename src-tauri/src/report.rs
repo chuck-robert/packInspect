@@ -4,13 +4,14 @@ use crate::cleaner;
 use crate::error::AppResult;
 use crate::executor;
 use crate::fsutil;
+use crate::icons;
 use crate::manager;
 use crate::models::*;
 use crate::packages;
 use crate::registry;
 use crate::validate;
 use crate::whitelist;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 决定本次要扫描的包管理器集合。
 /// 空列表 = 全部已探测到的；未知 id 直接拒绝（防止把任意字符串当命令名）。
@@ -26,35 +27,42 @@ pub fn resolve_targets(request: &ScanRequest, detected: &[ManagerInfo]) -> AppRe
 
 /// 拉取某个管理器的已安装包
 fn collect_packages(id: &str, req: &ScanRequest) -> Vec<PackageRecord> {
+    let measure = req.measure_package_size;
+    let timeout = req.timeout_ms;
     match id {
-        "npm" | "pnpm" | "yarn" | "bun" => {
-            let (_, records) = packages::node_global(id, req.timeout_ms, req.measure_package_size);
-            records
-        }
-        "pip" | "uv" => {
-            let (_, records) = packages::python_packages(id, req.timeout_ms, req.measure_package_size);
-            records
-        }
-        "cargo" => {
-            let mut records = packages::cargo_packages(req.timeout_ms);
-            if req.measure_package_size {
-                for r in records.iter_mut() {
-                    if let Some(p) = &r.path {
-                        let pb = PathBuf::from(p);
-                        if pb.is_dir() {
-                            r.size = Some(fsutil::dir_size(&pb));
-                        }
-                    }
-                }
-            }
-            records
-        }
+        "npm" | "pnpm" | "yarn" => packages::node_global(id, timeout, measure).1,
+        "pip" => packages::python_packages(id, timeout, measure).1,
+        "cargo" => packages::cargo_packages(timeout, measure).1,
+        "dotnet" => packages::dotnet_packages(measure).1,
+        "winget" => packages::winget_packages(timeout),
+        "powershellget" => packages::powershellget_packages(timeout),
+        "composer" => packages::composer_packages(timeout),
+        "gem" => packages::gem_packages(timeout),
         "go" => {
-            let root = manager::global_root_for("go", req.timeout_ms);
-            packages::go_packages(root.as_deref(), req.measure_package_size)
+            let root = manager::global_root_for("go", timeout);
+            packages::go_packages(root.as_deref(), measure)
         }
-        "gem" => packages::gem_packages(req.timeout_ms),
+        "maven" => {
+            let root = manager::global_root_for("maven", timeout);
+            packages::maven_packages(root.as_deref(), measure)
+        }
+        "chocolatey" => packages::chocolatey_packages(timeout),
+        "scoop" => {
+            let root = manager::global_root_for("scoop", timeout);
+            packages::scoop_packages(root.as_deref(), measure)
+        }
+        "conda" => packages::conda_packages(timeout),
+        "dart" => packages::dart_packages(timeout),
+        "luarocks" => packages::luarocks_packages(timeout),
+        "cpan" => packages::cpan_packages(timeout),
         _ => Vec::new(),
+    }
+}
+
+/// 为一条记录补上图标（走缓存，避免重复生成 SVG）
+fn attach_icon(icon_cache: &icons::IconCache, record: &mut PackageRecord) {
+    if record.icon.is_none() {
+        record.icon = Some(icon_cache.get_or_create(&record.manager, &record.name));
     }
 }
 
@@ -74,9 +82,13 @@ pub fn run_scan(detected: &[ManagerInfo], request: &ScanRequest) -> AppResult<Sc
         records.append(&mut got);
     }
 
-    // 2. 冗余/旧版本识别
+    // 2. 冗余/旧版本识别 + 图标
     packages::mark_old_versions(&mut records);
     records.sort_by(|a, b| a.manager.cmp(&b.manager).then_with(|| a.name.cmp(&b.name)));
+    let icon_cache = icons::IconCache::default();
+    for record in records.iter_mut() {
+        attach_icon(&icon_cache, record);
+    }
 
     // 3. 缓存统计
     let mut caches: Vec<CacheStats> = Vec::new();
@@ -121,13 +133,28 @@ pub fn collect_candidates(detected: &[ManagerInfo], timeout_ms: u64) -> AppResul
 
 /// 清理专用：只收集识别旧版本所需的包信息（不统计体积，速度优先）
 pub fn collect_for_clean(id: &str, timeout_ms: u64) -> Vec<PackageRecord> {
-    match id {
-        "npm" | "pnpm" | "yarn" | "bun" => packages::node_global(id, timeout_ms, false).1,
-        "pip" | "uv" => packages::python_packages(id, timeout_ms, false).1,
-        "cargo" => packages::cargo_packages(timeout_ms),
-        "gem" => packages::gem_packages(timeout_ms),
-        _ => Vec::new(),
-    }
+    let req = ScanRequest { managers: Vec::new(), measure_package_size: false, timeout_ms };
+    collect_packages(id, &req)
+}
+
+// ---------------------------------------------------------------------------
+// 未安装管理器的引导信息
+// ---------------------------------------------------------------------------
+
+/// 收集所有「未检测到」的管理器，供界面显示下载引导
+pub fn install_hints(detected: &[ManagerInfo]) -> Vec<InstallHint> {
+    detected
+        .iter()
+        .filter(|m| !m.detected)
+        .map(|m| InstallHint {
+            manager_id: m.id.clone(),
+            name: m.name.clone(),
+            language: m.language.clone(),
+            download_url: m.download_url.clone(),
+            docs_url: m.docs_url.clone(),
+            install_hint: manager::install_hint_for(&m.id),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -264,8 +291,33 @@ pub fn parent_dir_of(path: &str) -> Option<String> {
     Path::new(path).parent().map(|p| p.to_string_lossy().to_string())
 }
 
-/// 简易诊断信息，用于「关于」面板
+/// 简易诊断信息，用于「关于」面板与排障
 pub fn diagnostics() -> serde_json::Value {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let path_dirs: Vec<String> = std::env::split_paths(&path)
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    // 逐个管理器报告「能否解析到可执行文件」与解析失败的候选名
+    let probes: Vec<serde_json::Value> = whitelist::MANAGERS
+        .iter()
+        .map(|m| {
+            let resolved = executor::resolve_executable(m.exe_candidates);
+            serde_json::json!({
+                "id": m.id,
+                "candidates": m.exe_candidates,
+                "resolved": resolved.map(|p| p.to_string_lossy().to_string()),
+                "pathHint": m.exe_candidates.first().and_then(|first| {
+                    // 在 PATH 各目录里找同名文件，用于区分「目录不在 PATH」与「文件名不匹配」
+                    std::env::split_paths(&path)
+                        .map(|d| d.join(first))
+                        .find(|p| p.is_file())
+                        .map(|p| p.to_string_lossy().to_string())
+                }),
+            })
+        })
+        .collect();
+
     serde_json::json!({
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
@@ -275,6 +327,9 @@ pub fn diagnostics() -> serde_json::Value {
             .map(|m| (m.id.to_string(), whitelist::allowed_ops(m.id)))
             .collect::<std::collections::HashMap<_, _>>(),
         "executorAvailable": executor::resolve_executable(&["cmd.exe", "cmd"]).is_some(),
+        "pathDirCount": path_dirs.len(),
+        "pathDirs": path_dirs,
+        "probes": probes,
     })
 }
 
