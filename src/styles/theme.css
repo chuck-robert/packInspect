@@ -1,4 +1,4 @@
-/* =========================================================================
+﻿/* =========================================================================
    PackInspect 主题 —— 深色优先，可切换浅色
    所有颜色集中在 :root[data-theme=...]，改主题只需替换这一层变量。
    约束：无外部字体、无图片资源（图标由后端生成 data URI）。
@@ -77,7 +77,7 @@
   --font-sans: 'Segoe UI', 'Microsoft YaHei UI', system-ui, -apple-system, sans-serif;
   --font-mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
 
-  --titlebar-height: 38px;
+  --titlebar-height: 46px;
   --sidebar-width: 224px;
   --toolbar-height: 52px;
   --statusbar-height: 26px;
@@ -139,8 +139,11 @@ pre,
   padding-left: 12px;
   background: var(--titlebar-bg);
   border-bottom: 1px solid var(--border-subtle);
-  /* 整条都可拖拽（子元素用 data-tauri-drag-region 声明） */
   user-select: none;
+  /* 搜索下拉要能溢出标题栏，因此不能裁剪；z-index 保证盖住主区 */
+  overflow: visible;
+  position: relative;
+  z-index: 60;
 }
 
 .titlebar__brand {
@@ -167,26 +170,18 @@ pre,
   font-size: 12.5px;
 }
 
-.titlebar__tag {
-  font-size: 10.5px;
-  color: var(--text-muted);
+/* 搜索框容器：居中且限宽，避免超宽窗口里被拉得过长 */
+.titlebar__search {
+  flex: 0 1 520px;
+  margin-left: 8px;
+  min-width: 220px;
 }
 
-.titlebar__center {
+/* 拖拽填充区：占据剩余空间，同时保证标题栏空白处也能拖动窗口 */
+.titlebar__spacer {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.titlebar__status {
-  font-size: 11px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  height: 100%;
+  min-width: 20px;
 }
 
 .titlebar__controls {
@@ -341,19 +336,13 @@ pre,
   font-size: 18px;
 }
 
-/* ---------------------------------------------------------------- 搜索框 */
-.header-bar {
-  height: auto;
-  min-height: 48px;
-  padding: 7px 14px;
-}
-
+/* ---------------------------------------------------------------- 搜索框（位于标题栏内） */
 .searchbox {
   position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(440px, 46%);
+  width: 100%;
   padding: 0 10px;
   border: 1px solid var(--border-default);
   border-radius: var(--radius);
@@ -400,8 +389,10 @@ pre,
   left: 0;
   right: 0;
   top: calc(100% + 6px);
-  max-height: 420px;
+  /* 结果多时可滚动；scroll-margin 让 scrollIntoView 不贴边 */
+  max-height: 380px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -445,6 +436,12 @@ pre,
 }
 .search-hit.is-active {
   background: var(--accent-dim);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+/* 键盘导航时 scrollIntoView({block:'nearest'}) 会贴边，留出上下余量 */
+.search-hit {
+  scroll-margin-block: 28px;
 }
 .search-hit__label {
   flex: 0 1 auto;

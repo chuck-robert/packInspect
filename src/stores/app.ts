@@ -1,9 +1,10 @@
-/**
+﻿/**
  * 全局状态。单一 store 足够：数据量不大，且各视图之间强耦合（扫描结果 → 管理页 / 表格 / 缓存 / 清理）。
  */
 
 import { defineStore } from 'pinia'
 import { api, IpcError, type SupportedManager } from '@/api'
+import { matchesKeyword, shortVersion } from '@/utils/format'
 import type {
   CacheStats,
   CleanCandidate,
@@ -127,46 +128,52 @@ export const useAppStore = defineStore('app', {
     /**
      * 全局搜索结果：同时命中「包管理器」与「已安装包」。
      *
+     * 匹配范围刻意放宽：
+     * - 包管理器：名称 / id / 生态
+     * - 已安装包：名称 / 版本 / **描述（显示名）** / 路径
+     *
+     * 最后一项是关键修正：winget、cargo、dotnet 等生态把用户可读的名称放在
+     * description 里，而 name 是机器 ID。只匹配 name 会导致「按显示名搜不到包」——
+     * 例如 winget 的 Oh My Posh，name 是 `JanDeDobbeleer.OhMyPosh`，
+     * 用户输入 `oh my posh` / `ohmyposh` 时此前完全无结果。
+     * 归一化（忽略空格、连字符、点）进一步覆盖用户的随手写法。
+     *
      * 上限 50 条：结果只是给用户跳转用的，不需要列出全部 500 个包。
      */
     searchHits(s): SearchHit[] {
-      const keyword = s.keyword.trim().toLowerCase()
-      if (keyword.length < 1) return []
+      const keyword = s.keyword.trim()
+      if (!keyword) return []
       const hits: SearchHit[] = []
 
-      // 1) 包管理器：命中名称 / id / 语言
+      // 1) 包管理器
       for (const manager of s.managers) {
-        if (
-          manager.name.toLowerCase().includes(keyword) ||
-          manager.id.toLowerCase().includes(keyword) ||
-          manager.language.toLowerCase().includes(keyword)
-        ) {
+        if (matchesKeyword([manager.name, manager.id, manager.language], keyword)) {
           hits.push({
             kind: 'manager',
             managerId: manager.id,
             managerName: manager.name,
             label: manager.name,
             detail: manager.detected
-              ? `${manager.version ?? ''} · ${manager.globalRoot ?? ''}`.trim()
+              ? `${shortVersion(manager.version, manager.id)} · ${manager.globalRoot ?? ''}`.trim()
               : '',
           })
         }
       }
 
-      // 2) 已安装包：命中名称 / 版本
+      // 2) 已安装包
       for (const record of s.report?.packages ?? []) {
         if (hits.length >= 50) break
-        if (
-          record.name.toLowerCase().includes(keyword) ||
-          (record.version ?? '').toLowerCase().includes(keyword)
-        ) {
+        if (matchesKeyword([record.name, record.version, record.description, record.path], keyword)) {
           const managerName = s.managers.find((m) => m.id === record.manager)?.name ?? record.manager
           hits.push({
             kind: 'package',
             managerId: record.manager,
             managerName,
             label: record.name,
-            detail: `${record.version ?? ''} · ${managerName}`,
+            // 有显示名时一并展示，避免用户看到机器 ID 认不出来
+            detail: [record.version, record.description, managerName]
+              .filter(Boolean)
+              .join(' · '),
             record,
           })
         }
@@ -182,19 +189,13 @@ export const useAppStore = defineStore('app', {
     cacheOf: (s) => (managerId: string) =>
       s.caches.find((c) => c.managerId === managerId)?.totalBytes ?? null,
 
-    /** 当前视图的包列表 */
+    /** 当前视图的包列表（同样把显示名 description 纳入匹配） */
     visiblePackages(s): PackageRecord[] {
       const all = s.report?.packages ?? []
-      const kw = s.keyword.trim().toLowerCase()
       return all.filter((p) => {
         if (s.activeManager && p.manager !== s.activeManager) return false
         if (s.onlyRedundant && !p.redundant) return false
-        if (!kw) return true
-        return (
-          p.name.toLowerCase().includes(kw) ||
-          (p.version ?? '').toLowerCase().includes(kw) ||
-          (p.path ?? '').toLowerCase().includes(kw)
-        )
+        return matchesKeyword([p.name, p.version, p.description, p.path], s.keyword)
       })
     },
 

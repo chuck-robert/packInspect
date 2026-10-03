@@ -1,4 +1,4 @@
-//! 后端 ↔ 前端共享数据结构。
+﻿//! 后端 ↔ 前端共享数据结构。
 //!
 //! 约定：Rust 侧全部 `rename_all = "camelCase"`，与 `src/types/index.ts` 一一对应，
 //! 任何字段改动必须同步修改 TS 定义，否则前端类型检查会失败（这是刻意的，用来防漂移）。
@@ -331,6 +331,44 @@ impl Default for AppSettings {
             scan_on_startup: true,
         }
     }
+}
+
+/// 一次真实包管理操作（更新 / 卸载 / 安装）的结果。
+///
+/// 带完整输出与等价命令，便于用户在出问题时自行复核或重跑。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageOpResult {
+    pub manager_id: String,
+    pub package: String,
+    /// update | uninstall | install
+    pub action: String,
+    /// 等价命令（用于展示与日志，不用于执行）
+    pub command: String,
+    pub success: bool,
+    pub timed_out: bool,
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub message: Option<String>,
+    pub duration_ms: u64,
+}
+
+/// 单个管理器的扫描结果。
+///
+/// 存在的意义：把「一次全量扫描」拆成「每个管理器一次」，
+/// 前端可以在每个管理器扫完后立刻渲染，而不是等最慢的那个 ——
+/// winget 要几秒、pip 要几秒，串起来用户会盯着空白页干等。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerScanResult {
+    pub manager_id: String,
+    pub packages: Vec<PackageRecord>,
+    pub cache: Option<CacheStats>,
+    pub duration_ms: u64,
+    /// 该管理器是否被成功读取（false 时 packages 为空且 reason 有值）
+    pub ok: bool,
+    pub reason: Option<String>,
 }
 
 /// 图标请求：返回 data URI

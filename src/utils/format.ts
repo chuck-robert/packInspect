@@ -127,3 +127,31 @@ export function shortVersion(rawVersion: string | null | undefined, managerId = 
   const found = rest.match(/v?(\d+(?:\.\d+){1,3}(?:[-+][\w.]+)?)/)
   return found ? found[1] : ''
 }
+
+/**
+ * 搜索用的归一化：小写 + 去掉空格与常见连接符。
+ *
+ * 为什么需要：同一个包在不同生态里有多种写法，用户不会记准确形式。
+ * 例如 winget 的 Oh My Posh：显示名 `Oh My Posh`、包 ID `JanDeDobbeleer.OhMyPosh`，
+ * 用户可能输入 `ohmyposh` / `oh my posh` / `Oh-My-Posh` —— 归一化后都能命中。
+ */
+export function normalizeForSearch(input: string): string {
+  return input.toLowerCase().replace(/[\s\-_.]+/g, '')
+}
+
+/**
+ * 判断一条记录是否命中关键字。
+ *
+ * 之前只匹配 `name` 与 `version`，导致「按显示名搜不到包」——
+ * 不少生态（winget、cargo、dotnet）把用户可读的名称放在 description 里，
+ * 而 name 是机器 ID（如 `JanDeDobbeleer.OhMyPosh`）。这里把 description 也纳入匹配。
+ */
+export function matchesKeyword(
+  fields: (string | null | undefined)[],
+  keyword: string,
+): boolean {
+  const needle = normalizeForSearch(keyword)
+  if (!needle) return true
+  return fields.some((field) => !!field && normalizeForSearch(field).includes(needle))
+}
+

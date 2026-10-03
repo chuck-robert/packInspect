@@ -1,4 +1,4 @@
-//! PackInspect 库入口。
+﻿//! PackInspect 库入口。
 //!
 //! 分层（依赖方向自上而下，下层不反向依赖上层）：
 //! ```text
@@ -23,6 +23,7 @@ pub mod fsutil;
 pub mod icons;
 pub mod manager;
 pub mod models;
+pub mod package_ops;
 pub mod packages;
 pub mod plugins;
 pub mod registry;
@@ -41,6 +42,7 @@ pub fn run() {
             commands::supported_managers,
             commands::detect_managers,
             commands::run_scan,
+            commands::scan_manager,
             commands::get_cache_stats,
             // 镜像源
             commands::get_registry,
@@ -58,6 +60,7 @@ pub fn run() {
             commands::manager_logos,
             commands::browse_packages,
             commands::plan_install,
+            commands::run_package_op,
             commands::package_actions,
             commands::package_plugins,
             commands::install_hints,

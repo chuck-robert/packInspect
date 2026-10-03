@@ -38,45 +38,63 @@ pub fn actions_for(manager: &str, name: &str, scope: &str) -> Vec<ManagementActi
     });
 
     // ---- 2. 更新 ----
+    // `enabled` 由白名单决定：该管理器确实注册了 update 操作模板才可执行。
     if let Some(cmd) = update_command(manager, name) {
+        let supported = crate::whitelist::op_args(manager, "update").is_some();
         list.push(ManagementAction {
             action: "update".into(),
             label: "更新到最新版".into(),
             online: true,
             destructive: false,
-            enabled: false,
-            command_hint: Some(cmd),
-            note: Some(placeholder_note(manager, "更新")),
+            enabled: supported,
+            command_hint: Some(cmd.clone()),
+            note: Some(if supported {
+                format!("将执行：{cmd}（需二次确认）")
+            } else {
+                format!("{manager} 没有可靠的单包更新方式，请按官方文档手动升级")
+            }),
         });
     }
 
     // ---- 3. 卸载 ----
     if let Some(cmd) = uninstall_command(manager, name) {
+        let supported = crate::whitelist::op_args(manager, "uninstall").is_some();
         list.push(ManagementAction {
             action: "uninstall".into(),
             label: "卸载此包".into(),
             online: false,
             destructive: true,
-            enabled: false,
-            command_hint: Some(cmd),
-            note: Some(placeholder_note(manager, "卸载")),
+            enabled: supported,
+            command_hint: Some(cmd.clone()),
+            note: Some(if supported {
+                format!("破坏性操作，将执行：{cmd}（需二次确认）")
+            } else {
+                format!("{manager} 不支持从本工具卸载，请手动处理")
+            }),
         });
     }
 
     // ---- 4. 重装 / 安装 ----
     if let Some(cmd) = install_command(manager, name) {
+        let supported = crate::whitelist::op_args(manager, "install").is_some();
         list.push(ManagementAction {
             action: "install".into(),
             label: "重新安装".into(),
             online: true,
             destructive: true,
-            enabled: false,
-            command_hint: Some(cmd),
-            note: Some(placeholder_note(manager, "重装")),
+            enabled: supported,
+            command_hint: Some(cmd.clone()),
+            note: Some(if supported {
+                format!("将执行：{cmd}（需二次确认）")
+            } else {
+                format!("{manager} 不支持从本工具安装，请手动处理")
+            }),
         });
     }
 
-    // ---- 5. 禁用（仅 PowerShell 模块等支持）----
+    // ---- 5. 禁用（仅 PowerShell 模块）----
+    // 说明：PowerShell 没有"禁用模块"的原生概念，只能靠卸载或限制执行策略。
+    // 因此这里不给可执行入口，只提示正确做法。
     if manager == "powershellget" {
         list.push(ManagementAction {
             action: "disable".into(),
@@ -84,8 +102,11 @@ pub fn actions_for(manager: &str, name: &str, scope: &str) -> Vec<ManagementActi
             online: false,
             destructive: false,
             enabled: false,
-            command_hint: Some(format!("Uninstall-Module {name} -WhatIf")),
-            note: Some(placeholder_note(manager, "禁用")),
+            command_hint: Some(format!("Uninstall-Module {name} -Force  # 或设置执行策略限制")),
+            note: Some(
+                "PowerShell 没有「禁用模块」的原生操作，只能卸载或调整执行策略；请按上方命令手动处理"
+                    .into(),
+            ),
         });
     }
 
@@ -106,10 +127,6 @@ pub fn actions_for(manager: &str, name: &str, scope: &str) -> Vec<ManagementActi
     list
 }
 
-/// 占位说明：明确告知用户当前不会真的执行
-fn placeholder_note(manager: &str, verb: &str) -> String {
-    format!("一期为占位按钮：{verb}会改动你的真实环境，PackInspect 只给出等价命令，不代为执行（{manager}）")
-}
 
 fn scope_command(manager: &str, name: &str, scope: &str) -> String {
     match manager {
@@ -250,24 +267,47 @@ mod tests {
         for id in crate::whitelist::tier1_ids() {
             let list = actions_for(id, "some-package", "global");
             assert!(list.len() >= 3, "{id} 的动作过少: {}", list.len());
-            // manage / inspect 必须一期可用
+            // manage / inspect 必须可用
             let manage = list.iter().find(|a| a.action == "manage").expect("缺少 manage");
-            assert!(manage.enabled, "{id} 的 manage 应一期可用");
-            // 破坏性动作必须显式禁用
+            assert!(manage.enabled, "{id} 的 manage 应可用");
+            // 破坏性动作必须带说明，供确认对话框展示
             for a in list.iter().filter(|a| a.destructive) {
-                assert!(!a.enabled, "{id} 的破坏性动作 {} 不应默认可执行", a.action);
-                assert!(a.note.is_some(), "占位动作必须说明原因");
+                assert!(a.note.is_some(), "{id} 的破坏性动作 {} 必须说明后果", a.action);
             }
         }
     }
 
+    /// 破坏性动作现在**可以执行**（本轮新实现的能力），但必须：
+    /// 1. 标记为 destructive，让界面用红色警示并要求二次确认
+    /// 2. 只在白名单确实注册了对应操作模板时才 enabled
     #[test]
-    fn uninstall_is_never_enabled() {
+    fn uninstall_is_destructive_and_only_enabled_when_whitelisted() {
         for id in crate::whitelist::tier1_ids() {
             let list = actions_for(id, "pkg", "global");
             if let Some(uninstall) = list.iter().find(|a| a.action == "uninstall") {
-                assert!(!uninstall.enabled, "{id} 的卸载不应可执行");
-                assert!(uninstall.destructive);
+                assert!(uninstall.destructive, "{id} 的卸载必须标记为破坏性");
+                // dotnet 的全局包目录没有官方卸载命令，因此不应可执行
+                let expected = crate::whitelist::op_args(id, "uninstall").is_some();
+                assert_eq!(uninstall.enabled, expected, "{id} 的可执行状态应与白名单一致");
+                assert!(uninstall.note.is_some(), "必须说明将执行什么");
+            }
+        }
+    }
+
+    /// 每个可执行动作都必须有等价命令提示，供用户在确认对话框里核对
+    #[test]
+    fn enabled_mutating_actions_expose_their_command() {
+        for id in crate::whitelist::tier1_ids() {
+            for action in actions_for(id, "some-pkg", "global") {
+                if action.enabled
+                    && matches!(action.action.as_str(), "update" | "uninstall" | "install")
+                {
+                    assert!(
+                        action.command_hint.is_some(),
+                        "{id} 的 {} 可执行但没有命令提示",
+                        action.action
+                    );
+                }
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿//! 扫描编排 + 报告导出。
+//! 扫描编排 + 报告导出。
 
 use crate::cleaner;
 use crate::error::AppResult;
@@ -22,6 +22,50 @@ pub fn resolve_targets(request: &ScanRequest, detected: &[ManagerInfo]) -> AppRe
         packages::ensure_known(id)?;
     }
     Ok(request.managers.clone())
+}
+
+/// 收集单个管理器的包（供渐进扫描使用，是 `collect_packages` 的公开包装）
+pub fn collect_packages_for(id: &str, req: &ScanRequest) -> Vec<PackageRecord> {
+    collect_packages(id, req)
+}
+
+/// 扫描单个管理器：包 + 缓存统计 + 耗时。
+///
+/// 降级策略：探测不到、命令失败、超时都**不抛错**，而是返回 `ok = false` + `reason`，
+/// 让前端把这一项标失败后继续扫其它管理器 —— 一个坏掉的管理器不该让整轮扫描失败。
+pub fn scan_manager(id: &str, timeout_ms: u64, measure: bool) -> ManagerScanResult {
+    let started = std::time::Instant::now();
+    let req = ScanRequest {
+        managers: vec![id.to_string()],
+        measure_package_size: measure,
+        timeout_ms,
+    };
+
+    let mut records = collect_packages_for(id, &req);
+    packages::mark_old_versions(&mut records);
+    records.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let cache = manager::cache_stats(id, timeout_ms).ok();
+    let detected = crate::whitelist::find(id)
+        .map(|def| executor::resolve_executable(def.exe_candidates).is_some())
+        .unwrap_or(false);
+
+    let reason = if !detected {
+        Some(format!("未在本机检测到 {id} 的可执行文件"))
+    } else if records.is_empty() {
+        Some(format!("{id} 已安装，但没有读取到任何包"))
+    } else {
+        None
+    };
+
+    ManagerScanResult {
+        manager_id: id.to_string(),
+        ok: detected,
+        reason,
+        packages: records,
+        cache,
+        duration_ms: started.elapsed().as_millis() as u64,
+    }
 }
 
 /// 拉取某个管理器的已安装包

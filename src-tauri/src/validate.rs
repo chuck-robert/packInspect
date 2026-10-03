@@ -245,6 +245,66 @@ pub fn candidate_id(id: &str) -> AppResult<&str> {
     }
 }
 
+/// 允许被执行的包管理操作。
+///
+/// 这三个操作会**改动用户真实环境**，因此用枚举收敛取值范围 ——
+/// 前端只能提交这三个字面量之一，无法构造出别的动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageOp {
+    Update,
+    Uninstall,
+    Install,
+}
+
+impl PackageOp {
+    pub fn parse(value: &str) -> AppResult<PackageOp> {
+        match value.to_ascii_lowercase().as_str() {
+            "update" => Ok(PackageOp::Update),
+            "uninstall" => Ok(PackageOp::Uninstall),
+            "install" => Ok(PackageOp::Install),
+            other => Err(AppError::forbidden(format!("不允许的操作: {other}"))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PackageOp::Update => "update",
+            PackageOp::Uninstall => "uninstall",
+            PackageOp::Install => "install",
+        }
+    }
+
+    /// 卸载会移除软件，属于破坏性操作
+    pub fn is_destructive(self) -> bool {
+        matches!(self, PackageOp::Uninstall)
+    }
+}
+
+/// 校验包管理器 id 是白名单内的已知项
+pub fn validate_manager(manager: &str) -> AppResult<&str> {
+    if crate::whitelist::find(manager).is_some() {
+        Ok(manager)
+    } else {
+        Err(AppError::invalid(format!("不支持的包管理器: {manager}")))
+    }
+}
+
+/// 校验 (包管理器, 包名, 操作) 组合，并返回**静态参数模板**。
+///
+/// 返回值里恰有一个元素是 `{}`，由调用方替换为已校验的包名。
+/// 因此最终命令完全由 Rust 侧白名单决定，前端无法影响参数内容。
+pub fn resolve_package_op(
+    manager: &str,
+    package: &str,
+    op: PackageOp,
+) -> AppResult<&'static [&'static str]> {
+    validate_manager(manager)?;
+    package_name(package)?;
+    crate::whitelist::op_args(manager, op.as_str())
+        .ok_or_else(|| AppError::forbidden(format!("{manager} 不支持 {} 操作", op.as_str())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

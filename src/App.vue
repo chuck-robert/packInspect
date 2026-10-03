@@ -5,7 +5,7 @@
  * 结构：
  *   自绘标题栏（TitleBar）
  *   ├─ 侧边栏（NavSidebar：上=包管理器，下=工具）
- *   └─ 主区（HeaderBar 搜索 + 提示区 + 视图）
+ *   └─ 主区（工具栏 + 提示区 + 视图）
  *   状态栏（StatusBar）
  *
  * 默认视图是 `manage`（包管理总览）；点击某个包管理器会切到 `manager`（管理器详情，含分页）。
@@ -18,7 +18,6 @@ import TitleBar from '@/components/TitleBar.vue'
 import NavSidebar from '@/components/NavSidebar.vue'
 import StatusBar from '@/components/StatusBar.vue'
 import GlobalBanner from '@/components/GlobalBanner.vue'
-import HeaderBar from '@/components/HeaderBar.vue'
 import ManagerView from '@/views/ManagerView.vue'
 import ManagerDetailView from '@/views/ManagerDetailView.vue'
 import CacheView from '@/views/CacheView.vue'
@@ -90,9 +89,6 @@ async function openCleanDialog() {
     <NavSidebar />
 
     <main class="main">
-      <!-- 顶部：搜索 + 操作 -->
-      <HeaderBar />
-
       <header class="toolbar">
         <div class="toolbar__title">
           <button

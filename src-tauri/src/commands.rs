@@ -10,6 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::icons;
 use crate::manager;
 use crate::models::*;
+use crate::package_ops;
 use crate::packages;
 use crate::plugins;
 use crate::registry;
@@ -226,6 +227,22 @@ pub async fn get_cache_stats(manager_id: String) -> AppResult<CacheStats> {
     blocking(move || manager::cache_stats(&manager_id, 30_000)).await
 }
 
+/// 扫描**单个**管理器。
+///
+/// 供前端做渐进式扫描：每扫完一个就渲染一个，用户不必等最慢的那个。
+/// 失败不抛错，而是返回 `ok = false` + `reason`，让前端标失败后继续。
+#[tauri::command]
+pub async fn scan_manager(
+    manager_id: String,
+    measure_package_size: Option<bool>,
+    timeout_ms: Option<u64>,
+) -> AppResult<ManagerScanResult> {
+    packages::ensure_known(&manager_id)?;
+    let timeout = clamp_timeout(timeout_ms, 30_000);
+    let measure = measure_package_size.unwrap_or(false);
+    blocking(move || Ok(report::scan_manager(&manager_id, timeout, measure))).await
+}
+
 /// 枚举清理候选（只读，不会删除任何东西）
 #[tauri::command]
 pub async fn list_clean_candidates(
@@ -332,7 +349,33 @@ pub fn plan_install(manager_id: String, package: String) -> AppResult<InstallPla
     crate::browse::install_plan(&manager_id, &package)
 }
 
-/// 列出一个包支持的右键管理动作。
+/// 执行真实的包管理操作（更新 / 卸载 / 安装）。
+///
+/// 【这是本项目唯一会改动用户环境的入口】
+/// 安全约束逐条：
+/// 1. 操作名先经 `PackageOp::parse` 收敛为三个字面量之一；
+/// 2. 包管理器与包名分别过白名单与 `validate::package_name`（拒绝一切 shell 元字符）；
+/// 3. 参数来自 `whitelist::op_args` 的**静态数组模板**，只把 `{}` 替换为已校验的包名；
+/// 4. `confirm` 必须为 true —— 前端必须完成二次确认才能走到这里；
+/// 5. 强制超时（装包可能很慢，默认 5 分钟，上限 10 分钟）；
+/// 6. 不经过 shell：Windows 上 .cmd 由 executor 统一包装，其余直接 spawn。
+#[tauri::command]
+pub async fn run_package_op(
+    manager_id: String,
+    package: String,
+    action: String,
+    confirm: bool,
+) -> AppResult<PackageOpResult> {
+    if !confirm {
+        return Err(AppError::forbidden("需要先确认才能执行该操作"));
+    }
+    let op = validate::PackageOp::parse(&action)?;
+    let template = validate::resolve_package_op(&manager_id, &package, op)?;
+
+    blocking(move || package_ops::run(&manager_id, &package, op, template)).await
+}
+
+/// 生成某个包支持的右键管理动作。
 ///
 /// 一期只有 `manage` / `inspect` / `openDocs` 为可用状态；
 /// 更新、卸载、安装会返回**等价官方命令**但 `enabled = false`，由界面标注为占位。
