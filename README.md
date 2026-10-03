@@ -94,15 +94,41 @@ $env:RUSTUP_UPDATE_ROOT = 'https://rsproxy.cn/rustup'
 
 ## 4. 开发
 
+### 推荐：使用启动脚本（Windows，非交互环境友好）
+
+仓库根目录提供三个 `.cmd` 启动器。它们会自行补齐 cargo 路径与 MSVC 环境，
+不依赖当前 shell 的 PATH，因此可直接双击或从任意终端调用：
+
+```cmd
+:: 1. 先起前端 devServer（固定 1420，日志 vite-dev.log）
+tauri-vite.cmd
+
+:: 2. 再起桌面应用（编译 Rust 并打开窗口，日志 app-run.log）
+tauri-run.cmd
+```
+
+> **为什么不用 `npm run tauri:dev`**：Tauri CLI 会执行 `tauri.conf.json` 里的
+> `build.beforeDevCommand`（即 `npm run dev`），该命令依赖 `npm` 垫片；
+> 在非交互 shell / 无 npm 的 PATH 下会直接失败并中断构建。
+> `tauri-run.cmd` 改为直接 `cargo run`：Tauri 二进制本身会读取 `build.devUrl`
+> 连接已运行的 Vite，效果等价且少一层依赖。
+>
+> 另有 `tauri-dev.cmd`（走 Tauri CLI）。它同样会触发 `beforeDevCommand`，因此**必须先在
+> PATH 里能找到 `npm`**，并已在运行 `tauri-vite.cmd`，否则会因端口冲突或找不到 npm 而失败。
+> 若你在「Developer PowerShell for VS」这类环境里 `npm` 可用，`npm run tauri:dev` 也可以。
+>
+> ⚠️ 三个 `.cmd` 文件**必须保持纯 ASCII**：`cmd.exe` 按控制台 OEM 代码页解析脚本，
+> 非 ASCII 字符会破坏行结构（中文注释会导致脚本整体解析失败）。
+
+### 直接用 npm 脚本
+
 ```bash
 npm install            # 安装前端依赖
 npm run typecheck      # vue-tsc 类型检查
 npm run dev            # 只跑前端（浏览器里看不到数据，IPC 不可用）
-npm run tauri:dev      # 完整桌面应用（推荐）
+npm run tauri:dev      # 完整桌面应用（需 npm 在 PATH 中）
 npm run tauri:build    # 打包安装程序（NSIS）
 ```
-
-`npm run tauri:dev` 会自动启动 Vite（端口固定 **1420**，`strictPort`），再编译 Rust 并打开窗口。
 
 ## 5. 后端命令清单（前端可调用的全部 IPC）
 

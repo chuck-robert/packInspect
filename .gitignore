@@ -1,6 +1,7 @@
 node_modules/
 dist/
 *.local
+*.log
 .DS_Store
 .idea/
 .vscode/*
@@ -9,3 +10,6 @@ dist/
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+
+# 本地截图 / 临时验证产物
+shot-*.png
