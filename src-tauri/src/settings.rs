@@ -1,4 +1,4 @@
-﻿//! 设置持久化与受控的外部链接打开。
+//! 设置持久化与受控的外部链接打开。
 //!
 //! 设置存放于 `%APPDATA%/PackInspect/settings.json`（macOS/Linux 为对应的配置目录），
 //! 采用「读取失败即回退默认值」的宽松策略：配置文件损坏不应让应用起不来。
@@ -166,11 +166,18 @@ pub fn open_external(url: &str) -> AppResult<String> {
     {
         // rundll32 是 Windows 官方推荐的「无 shell 打开 URL」方式，
         // 不像 `cmd /c start` 那样需要经过命令行解析。
-        std::process::Command::new("rundll32.exe")
-            .arg("url.dll,FileProtocolHandler")
-            .arg(&safe)
-            .spawn()
-            .map_err(|e| AppError::io(format!("打开浏览器失败: {e}")))?;
+        let mut cmd = std::process::Command::new("rundll32.exe");
+        cmd.arg("url.dll,FileProtocolHandler").arg(&safe);
+        // 不加这个标志时，打开链接会闪一个控制台窗口。
+        // rundll32 本身是 GUI 子系统程序，但经由它启动的处理器不一定 ——
+        // 显式指定更稳妥。
+        {
+            use std::os::windows::process::CommandExt;
+            /// CREATE_NO_WINDOW：不为控制台程序创建窗口
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.spawn().map_err(|e| AppError::io(format!("打开浏览器失败: {e}")))?;
     }
 
     #[cfg(target_os = "macos")]

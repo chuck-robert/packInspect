@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     PackInspect 构建 / 测试 / 启动辅助脚本。
 
@@ -16,7 +16,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('check', 'test', 'clippy', 'run', 'build', 'doctor', 'verify')]
+    [ValidateSet('check', 'test', 'clippy', 'run', 'build', 'package', 'doctor', 'verify')]
     [string]$Task = 'check',
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -75,6 +75,54 @@ if (-not $toolchain.Ok) {
 }
 
 # ---------------------------------------------------------------------------
+# package：产出安装程序（NSIS 向导式）
+# ---------------------------------------------------------------------------
+# 打包前先跑一次 verify：配置类问题（BOM、缺 resources、v1 字段名）在这里
+# 报错比在 tauri build 里报错清楚得多，而且打包要几分钟，早失败更省时间。
+if ($Task -eq 'package') {
+    Write-Host ''
+    Write-Host '  ▶ 打包前先做配置校验' -ForegroundColor Cyan
+    & $PSCommandPath verify
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ''
+        Write-Host '  ✗ 配置校验未通过，已中止打包' -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host ''
+    Write-Host '  ▶ npx tauri build' -ForegroundColor Cyan
+    Write-Host '    首次打包需要编译 release 版（3~8 分钟），请勿关闭窗口。' -ForegroundColor DarkGray
+    Write-Host ''
+    Push-Location $repoRoot
+    try {
+        & cmd.exe /c "npx tauri build 2>&1"
+        $code = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    if ($code -ne 0) {
+        Write-Host ''
+        Write-Host "  ✗ 打包失败（退出码 $code）" -ForegroundColor Red
+        exit $code
+    }
+
+    # 把产物路径明确打出来 —— tauri 的输出夹在一堆编译日志里，不好找
+    $bundleDir = Join-Path $repoRoot 'src-tauri\target\release\bundle'
+    $setup = Get-ChildItem $bundleDir -Recurse -Filter '*-setup.exe' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Write-Host ''
+    if ($setup) {
+        Write-Host "  ✓ 安装程序：$($setup.FullName)" -ForegroundColor Green
+        Write-Host "    大小：$([math]::Round($setup.Length / 1MB, 2)) MB" -ForegroundColor DarkGray
+    } else {
+        Write-Host '  ✓ 打包完成，但没找到 *-setup.exe，请检查 bundle 目录' -ForegroundColor Yellow
+    }
+    Write-Host ''
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
 # verify：前端纯逻辑的回归校验
 # ---------------------------------------------------------------------------
 # 这几个检查覆盖的是「只有跑真实数据才会暴露」的前端逻辑问题，而它们又不需要
@@ -84,7 +132,7 @@ if (-not $toolchain.Ok) {
 # 不放进 cargo test 是因为它们是 TypeScript 侧的逻辑；不放进 vitest 是因为
 # 为了两个断言引入整套测试框架不划算（项目目前无前端测试依赖）。
 if ($Task -eq 'verify') {
-    $scripts = @('verify-scan-merge.mjs', 'verify-search-parity.mjs')
+    $scripts = @('verify-scan-merge.mjs', 'verify-search-parity.mjs', 'verify-config.mjs')
     $node = (Get-Command node -ErrorAction SilentlyContinue).Source
     if (-not $node) {
         Write-Host '  找不到 node，无法执行前端逻辑校验。' -ForegroundColor Red

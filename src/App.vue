@@ -21,6 +21,7 @@ import GlobalBanner from '@/components/GlobalBanner.vue'
 import ManagerView from '@/views/ManagerView.vue'
 import ManagerDetailView from '@/views/ManagerDetailView.vue'
 import CacheView from '@/views/CacheView.vue'
+import InstallView from '@/views/InstallView.vue'
 import RegistryView from '@/views/RegistryView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import ReportView from '@/views/ReportView.vue'
@@ -134,6 +135,7 @@ async function openCleanDialog() {
 
       <ManagerView v-if="store.view === 'manage'" />
       <ManagerDetailView v-else-if="store.view === 'manager'" />
+      <InstallView v-else-if="store.view === 'install'" />
       <CacheView v-else-if="store.view === 'cache'" />
       <RegistryView v-else-if="store.view === 'registry'" />
       <SettingsView v-else-if="store.view === 'settings'" />

@@ -1,4 +1,4 @@
-# PackInspect
+﻿# PackInspect
 
 本机包环境扫描工具。检测多种包管理器、列出已安装包、统计缓存占用、读写镜像源配置、
 导出报告，并提供**安全的缓存清理**。技术栈：**Vue 3 + TypeScript + Vite** 前端，
@@ -81,6 +81,52 @@ scripts\build.ps1 run
 > `build.beforeDevCommand`（`npm run dev`），该命令依赖 `npm` 垫片，在非交互 shell
 > 或 PATH 不含 npm 时会直接失败并中断构建。直接 `cargo run` 等效且少一层依赖 ——
 > Tauri 二进制会自己读取 `build.devUrl` 连接已运行的 Vite。
+
+## 打包与安装
+
+### 产出安装程序
+
+```
+./scripts/build.ps1 package       # 或直接 npx tauri build
+```
+
+产物：`src-tauri/target/release/bundle/nsis/PackInspect_<版本>_x64-setup.exe`（约 1.4 MB）。
+
+### 安装界面（NSIS 向导）
+
+Tauri v2 的 NSIS 安装程序**本身就是向导式**，包含：
+
+| 页面 | 内容 |
+|---|---|
+| 语言选择 | 简体中文 / English（`displayLanguageSelector`） |
+| 欢迎 | 说明与「下一步」 |
+| **选择安装位置** | 可改目录，显示可用空间与所需空间 |
+| 安装进度 | 进度条 + 逐项日志（解压缩、创建快捷方式、写注册表） |
+| 完成 | 「PackInspect 已经成功安装到本机」 |
+
+已安装 / 重装时会进入**维护页**，可选「添加/重新安装组件」或「卸载 PackInspect」。
+
+截图见 docs/screenshots/installer-*.png；可用 `scripts/walk-installer.ps1` 自动走查并逐页截图。
+
+安装行为：
+- `installMode: currentUser` —— 装到 `%LOCALAPPDATA%\PackInspect`，**不需要管理员权限**
+- 自动创建开始菜单与桌面快捷方式
+- 卸载通过「设置 → 应用」或安装目录下的 `uninstall.exe`
+
+### 打包时容易踩的坑
+
+| 坑 | 症状 | 防回退 |
+|---|---|---|
+| 漏配 `bundle.resources` | 装完少了 `scripts/run-install.ps1`，「执行安装」的可见命令行窗口失效 | `verify-config.mjs` 断言该脚本已列入 resources |
+| `tauri.conf.json` 被写入 UTF-8 **BOM** | 构建报 `expected value at line 1 column 1`，看起来像文件为空 | `verify-config.mjs` 扫描所有 JSON 的 BOM |
+| 把 Tauri **v1** 的 NSIS 字段名（`oneClick` / `allowToChangeInstallationDirectory` / `createDesktopShortcut`）写进 v2 配置 | 构建报 `is not valid under any of the schemas` | `verify-config.mjs` 校验 nsis 字段是否都在 v2 白名单内 |
+| 打包时用 PowerShell 改 `tauri.conf.json` | 同上（`Set-Content -Encoding utf8` 会加 BOM） | 同上 |
+
+### 图标
+
+`scripts/make-icon.py` 生成（需要 Pillow）：深色底 + 等距包裹箱 + 放大镜，
+输出 32 / 128 / 256 的 PNG 与含 7 种尺寸的 `icon.ico`（16/24/32/48/64/128/256）。
+不用官方 logo 是因为那涉及商标，且复杂路径在小尺寸下糊成一团。
 
 ### 前端逻辑回归校验
 

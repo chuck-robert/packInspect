@@ -215,7 +215,7 @@ export type CleanPhase = 'idle' | 'previewing' | 'previewed' | 'executing' | 'do
  * 而不是直接跳到包列表 —— 这样用户先看到「它是什么、装在哪、版本多少」，
  * 再从分页进入包列表 / 浏览安装 / 管理操作。
  */
-export type ViewKey = 'manage' | 'manager' | 'cache' | 'registry' | 'settings'
+export type ViewKey = 'manage' | 'manager' | 'install' | 'cache' | 'registry' | 'settings'
 
 /** 管理器详情页内的分页 */
 export type ManagerTab = 'overview' | 'packages' | 'browse' | 'manage'
@@ -242,7 +242,7 @@ export interface RemotePackage {
   downloads: number | null
   /** 包主页地址 */
   homepage: string | null
-  /** 等价安装命令（本工具不代为执行） */
+  /** 等价安装命令（也用于执行前展示给用户核对） */
   installCommand: string | null
 }
 
@@ -254,8 +254,10 @@ export interface BrowseRequest {
 }
 
 /**
- * 安装方案：**只包含命令，不会执行**。
- * `explanation` 说明为什么不由本工具代为执行。
+ * 安装方案：包含确切命令与作用域说明。
+ *
+ * 它本身不执行任何东西；要执行需再经确认对话框走 `run_package_op`。
+ * `explanation` 说明这条命令做什么、有什么范围限制（例如 dotnet 只能作用于当前项目）。
  */
 export interface InstallPlan {
   managerId: string

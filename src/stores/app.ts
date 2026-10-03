@@ -78,6 +78,8 @@ interface State {
    * 列出来只会稀释真正可用的那部分。
    */
   showOtherPlatforms: boolean
+  /** 最近一次包操作的结果（安装界面用于页内回显，不需要再开对话框） */
+  lastOpResult: PackageOpResult | null
   loadingCandidates: boolean
   savingRegistry: boolean
 
@@ -126,6 +128,7 @@ export const useAppStore = defineStore('app', {
     scanProgress: { total: 0, completed: 0, current: null, failed: {} },
     lastScannedAt: {},
     showOtherPlatforms: false,
+    lastOpResult: null,
     loadingCandidates: false,
     savingRegistry: false,
     view: 'manage',
@@ -417,6 +420,7 @@ export const useAppStore = defineStore('app', {
       const started = Date.now()
       try {
         const result = await api.runPackageOp(managerId, packageName, action, true)
+        this.lastOpResult = result
         this.pushLog(
           `${managerId} ${action} ${packageName}：${result.success ? '成功' : '失败'}` +
             `${result.command ? `（${result.command}）` : ''}`,

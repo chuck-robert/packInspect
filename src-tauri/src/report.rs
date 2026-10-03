@@ -379,6 +379,10 @@ pub fn diagnostics() -> serde_json::Value {
             .map(|m| (m.id.to_string(), whitelist::allowed_ops(m.id)))
             .collect::<std::collections::HashMap<_, _>>(),
         "executorAvailable": executor::resolve_executable(&["cmd.exe", "cmd"]).is_some(),
+        // 可见命令行窗口依赖 scripts/run-install.ps1。
+        // 打包时若漏了 bundle.resources，安装版这个功能会静默失效 ——
+        // 把它暴露在诊断里，出问题时一眼能看出是「脚本没打进去」而不是别的。
+        "installWrapper": crate::console::wrapper_script_diagnostic(),
         "pathDirCount": path_dirs.len(),
         "pathDirs": path_dirs,
         "probes": probes,

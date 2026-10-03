@@ -1,4 +1,4 @@
-﻿//! 命令解析与安全执行器。
+//! 命令解析与安全执行器。
 //!
 //! 规则：
 //! 1. 只执行 `whitelist::op_args` 返回的静态参数，**不接受任何拼接的命令行**。
@@ -189,13 +189,28 @@ fn windows_registry_paths() -> Vec<PathBuf> {
 
         let comspec = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
         for (key, name) in queries {
-            let output = std::process::Command::new(&comspec)
-                .arg("/D")
+            let mut reg = std::process::Command::new(&comspec);
+            reg.arg("/D")
                 .arg("/S")
                 .arg("/C")
                 .arg(format!("reg query \"{key}\" /v {name}"))
                 .stdin(std::process::Stdio::null())
-                .output();
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+
+            // 【必须加】否则每次调用都会闪一个控制台黑框。
+            // 这段是 PATH 回退逻辑，在启动探测时会被**每个管理器**调用一次
+            //（各两次注册表查询），漏掉这个标志就是一连串黑框反复开关 ——
+            // 曾经真实发生过，看起来像程序在反复启动什么东西。
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                /// CREATE_NO_WINDOW：不为控制台程序创建窗口
+                const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                reg.creation_flags(CREATE_NO_WINDOW);
+            }
+
+            let output = reg.output();
             let Ok(output) = output else { continue };
             let text = String::from_utf8_lossy(&output.stdout);
             // 输出形如：`    Path    REG_EXPAND_SZ    C:\a;C:\b`

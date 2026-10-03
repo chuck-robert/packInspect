@@ -1498,6 +1498,57 @@ table.data tbody tr.is-selected td {
   gap: 6px;
 }
 
+/* ---------------------------------------------------------------- 安装界面 */
+.install-layout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.install-repos {
+  width: 210px;
+  flex: none;
+}
+.install-repos__body {
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+  padding: 5px;
+}
+.install-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.install-repo:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.install-repo.is-active {
+  background: var(--accent-dim);
+  color: var(--accent-hover);
+}
+.install-repo__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.install-repo__lang {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex: none;
+}
+
 /* ---------------------------------------------------------------- 镜像源 */
 .registry-layout {
   display: flex;

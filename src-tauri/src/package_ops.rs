@@ -68,6 +68,44 @@ fn display_command(manager: &str, args: &[String]) -> String {
     format!("{program} {}", quoted.join(" "))
 }
 
+/// 同一时刻只允许一个包操作在跑。
+///
+/// 【为什么必须串行】
+/// 每次操作都会**新开一个命令行窗口**并把输出写进同一个日志文件。
+/// 若能并发：
+/// 1. 用户连点几次就冒出好几个窗口，看起来像"窗口反复开关"
+/// 2. 同一个 `<管理器>-<操作>-<包名>.log` 被两个进程同时写，状态文件互相覆盖，
+///    结果可能张冠李戴（A 的退出码被 B 读走）
+///
+/// 用一个全局标志把它挡住，并明确告诉用户"上一个还没结束"。
+static OP_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 正在执行时的守卫：离开作用域自动释放标志（包括 panic 路径）
+#[derive(Debug)]
+struct OpGuard;
+
+impl OpGuard {
+    fn acquire() -> AppResult<OpGuard> {
+        use std::sync::atomic::Ordering;
+        // compare_exchange：只有从 false 抢到 true 的那个才能继续
+        if OP_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(AppError::forbidden(
+                "已有一个包操作正在执行，请等它结束后再试（避免并发安装互相干扰）",
+            ));
+        }
+        Ok(OpGuard)
+    }
+}
+
+impl Drop for OpGuard {
+    fn drop(&mut self) {
+        OP_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// 执行一个包管理操作
 ///
 /// **在可见的命令行窗口里执行**（见 `console` 模块）：
@@ -83,6 +121,9 @@ pub fn run(
     let def = whitelist::find(manager)
         .ok_or_else(|| AppError::invalid(format!("不支持的包管理器: {manager}")))?;
 
+    // 并发守卫必须在解析可执行文件之前拿到：拿不到就直接拒绝，不开窗口
+    let _guard = OpGuard::acquire()?;
+
     let exe = executor::resolve_executable(def.exe_candidates)
         .ok_or_else(|| AppError::not_installed(manager))?;
 
@@ -93,7 +134,32 @@ pub fn run(
     // 故意**不等待按键**（pause=false）：
     // 否则后台的等待线程会一直挂到这个窗口被关闭为止，一旦用户走开就会撞上超时并被误判为失败。
     // 命令行的完整输出已经落进日志，界面会给出日志路径，用户随时可以回看。
-    let outcome = console::run_visible(&exe, &args, &log_path, timeout, false)?;
+    let outcome = match console::run_visible(&exe, &args, &log_path, timeout, false) {
+        Ok(out) => out,
+        // 包装脚本缺失（打包时漏了 resources）或系统没有 PowerShell 时，
+        // run_visible 会返回错误。这里必须把它**变成一次失败的结果**而不是向上抛异常：
+        // 否则界面只会显示一个通用错误，用户完全不知道是"打包漏了文件"。
+        Err(e) => {
+            return Ok(PackageOpResult {
+                manager_id: manager.to_string(),
+                package: package.to_string(),
+                action: op.as_str().to_string(),
+                command: display_command(manager, &args),
+                success: false,
+                timed_out: false,
+                exit_code: None,
+                stdout: String::new(),
+                stderr: e.message.clone(),
+                message: Some(format!(
+                    "无法打开命令行窗口执行：{}。\
+                     （若为安装版，可能是打包时缺少 scripts/run-install.ps1）",
+                    e.message
+                )),
+                duration_ms: 0,
+                log_path: None,
+            })
+        }
+    };
 
     // 输出可能很长（cargo 编译日志），console 模块已按字符边界截断。
     // 先取出失败提示，再移动 stdout（否则会 borrow-after-move）
@@ -133,6 +199,11 @@ pub fn run(
 /// 放在 APPDATA 而不是程序目录：程序可能装在只读位置，而日志要能随时写。
 /// 文件名里的包名已过 `validate::package_name`（无 shell 元字符，也无路径分隔符），
 /// 因此不会出现路径穿越。
+///
+/// 注意：文件名**不含时间戳**，因此同一 (管理器, 操作, 包) 多次执行会复用同一个文件。
+/// 这对用户是好事（每次看同一个路径即可），但要求执行必须串行 ——
+/// 否则两个进程会同时写它、状态文件互相覆盖，结果可能张冠李戴。
+/// 串行由 `OpGuard` 保证。
 fn log_path_for(manager: &str, package: &str, op: PackageOp) -> std::path::PathBuf {
     // settings_path 返回 Result<PathBuf>，取不到时退回临时目录（日志仍要能写）
     let base = crate::settings::settings_path()
@@ -309,6 +380,28 @@ mod tests {
         let args = vec!["-Command".to_string(), "Install-Module -Name Pester -Force".to_string()];
         let shown = display_command("powershellget", &args);
         assert!(shown.contains("\"Install-Module -Name Pester -Force\""), "{shown}");
+    }
+
+    /// 并发守卫：同一时刻只能有一个操作在跑，且离开作用域后必须释放。
+    ///
+    /// 为什么重要：每个操作都会新开一个命令行窗口并写同一个日志文件。
+    /// 若能并发，用户连点就会冒出多个窗口（看起来像"窗口反复开关"），
+    /// 而且日志与状态文件会互相覆盖，结果可能张冠李戴。
+    #[test]
+    fn only_one_operation_may_run_at_a_time() {
+        {
+            let first = OpGuard::acquire();
+            assert!(first.is_ok(), "第一次获取应成功");
+            // 持有时第二次必须失败
+            let second = OpGuard::acquire();
+            assert!(second.is_err(), "已有一个在跑时，第二次获取必须被拒绝");
+            assert_eq!(second.unwrap_err().code, "FORBIDDEN");
+        }
+        // 上一个守卫已释放，此时应能重新获取
+        let again = OpGuard::acquire();
+        assert!(again.is_ok(), "释放后应能再次获取");
+        drop(again);
+        assert!(OpGuard::acquire().is_ok(), "再次释放后仍可用");
     }
 
     /// 日志路径必须落在 APPDATA 下的 logs 目录，且不能因包名而产生路径穿越

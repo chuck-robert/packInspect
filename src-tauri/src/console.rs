@@ -161,10 +161,8 @@ fn wait_for_log(log_path: &Path) -> String {
     }
 }
 
-/// 找到 `scripts/run-install.ps1`。
-///
-/// 开发运行时当前目录是 `src-tauri`，打包后则是安装目录 —— 因此两个位置都找。
-fn wrapper_script_path() -> AppResult<PathBuf> {
+/// 列出查找包装脚本时会尝试的候选路径（顺序即优先级）
+fn wrapper_candidates() -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // 1) 相对可执行文件：<安装目录>/scripts/run-install.ps1
@@ -180,6 +178,29 @@ fn wrapper_script_path() -> AppResult<PathBuf> {
         candidates.push(cwd.join("scripts").join("run-install.ps1"));
         candidates.push(cwd.join("..").join("scripts").join("run-install.ps1"));
     }
+
+    candidates
+}
+
+/// 供诊断使用：报告包装脚本是否找到、以及实际路径与尝试过的候选。
+///
+/// 为什么要暴露它：这个脚本是**打包资源**，漏打时安装版的「可见命令行窗口」
+/// 会静默失效。把它放进 `get_diagnostics`，出问题一眼能看出原因。
+pub fn wrapper_script_diagnostic() -> serde_json::Value {
+    let candidates = wrapper_candidates();
+    let found = candidates.iter().find(|p| p.is_file());
+    serde_json::json!({
+        "found": found.is_some(),
+        "path": found.map(|p| p.to_string_lossy().to_string()),
+        "tried": candidates.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+    })
+}
+
+/// 找到 `scripts/run-install.ps1`。
+///
+/// 开发运行时当前目录是 `src-tauri`，打包后则是安装目录 —— 因此两个位置都找。
+fn wrapper_script_path() -> AppResult<PathBuf> {
+    let candidates = wrapper_candidates();
 
     for candidate in &candidates {
         if candidate.is_file() {
