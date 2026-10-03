@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 应用外壳。
  *
@@ -99,7 +99,6 @@ async function openCleanDialog() {
             ← {{ t('nav.back') }}
           </button>
           {{ activeTitle }}
-          <span v-if="store.scanning || store.detecting" class="spinner" />
         </div>
 
         <div class="toolbar__spacer" />

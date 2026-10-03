@@ -20,6 +20,34 @@ console.log('=== 源码检查 ===')
 console.log('  保留未扫管理器的包:', hasPreserveFilter ? '✅ 有' : '❌ 无')
 console.log('  managers 用并集:', hasCoveredSet ? '✅ 有' : '❌ 无')
 
+// ---- 性能相关的结构断言 ----
+//
+// 这几条不验证"算得对"，而是防止性能优化被无意改回去：
+// 扫描并发化、渲染节流、探测并发化。它们都是"看起来等价、实则差数倍耗时"的改动，
+// 一旦被顺手还原，用功能测试是发现不了的。
+const hasScanConcurrency = /const SCAN_CONCURRENCY = \d+/.test(appTs)
+const hasWorkerPool = /const worker = async \(\) => \{/.test(appTs)
+const hasThrottledRebuild = /requestAnimationFrame\(\(\) => \{/.test(appTs)
+// 收尾时必须同步重建一次，否则节流那一帧可能还没落地，扫描结束时会少一个管理器
+const hasFinalRebuild = /await Promise\.all\(workers\)[\s\S]{0,200}?rebuildReport\(\)/.test(appTs)
+const hasSnapshotSave = /api\.saveSnapshot\(/.test(appTs)
+const hasSnapshotLoad = /api\.loadSnapshot\(/.test(appTs)
+
+const commandsRs = readFileSync(new URL('../src-tauri/src/commands.rs', import.meta.url), 'utf8')
+const hasDetectConcurrency = /const DETECT_CONCURRENCY: usize = \d+/.test(commandsRs)
+const hasScopedThreads = /std::thread::scope\(/.test(commandsRs)
+
+console.log('\n=== 性能与缓存的结构断言 ===')
+console.log('  扫描并发上限常量:', hasScanConcurrency ? '✅ 有' : '❌ 无')
+console.log('  扫描工作窃取池:', hasWorkerPool ? '✅ 有' : '❌ 无')
+console.log('  渲染节流:', hasThrottledRebuild ? '✅ 有' : '❌ 无')
+console.log('  收尾同步重建:', hasFinalRebuild ? '✅ 有' : '❌ 无')
+console.log('  首屏载入快照:', hasSnapshotLoad ? '✅ 有' : '❌ 无')
+console.log('  扫描后回写快照:', hasSnapshotSave ? '✅ 有' : '❌ 无')
+console.log('  探测并发上限常量:', hasDetectConcurrency ? '✅ 有' : '❌ 无')
+console.log('  探测用作用域线程:', hasScopedThreads ? '✅ 有' : '❌ 无')
+
+
 // ---- 模拟数据：三个管理器 ----
 const managers = [
   { id: 'npm', name: 'npm' },
@@ -108,6 +136,11 @@ assert(
   after.managers.length === 3,
   '修复后：managers 列表不因扫描范围缩水（仍为 3 个）',
 )
+assert(hasScanConcurrency && hasWorkerPool, '扫描仍有并发上限与工作窃取池（性能优化未被改回串行）')
+assert(hasThrottledRebuild, '渲染仍被节流（否则每扫完一个管理器都要全量排序一次）')
+assert(hasFinalRebuild, '并发扫描收尾时仍会同步重建 report（否则可能少一个管理器的数据）')
+assert(hasDetectConcurrency && hasScopedThreads, '探测仍有并发上限（串行 39 个管理器要慢数倍）')
+assert(hasSnapshotLoad && hasSnapshotSave, '快照仍在首屏载入、扫描后回写')
 
 console.log(failed === 0 ? '\n全部通过 ✅' : `\n${failed} 项失败 ❌`)
 process.exit(failed === 0 ? 0 : 1)

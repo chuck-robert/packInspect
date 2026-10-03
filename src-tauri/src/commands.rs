@@ -57,35 +57,98 @@ impl AppState {
     }
 }
 
-/// 探测所有已知包管理器（单个失败不影响整体）
-fn detect_all(timeout_ms: u64, theme: icons::Theme) -> AppResult<Vec<ManagerInfo>> {
-    let mut out = Vec::with_capacity(crate::whitelist::MANAGERS.len());
-    for def in crate::whitelist::MANAGERS {
-        // 探测阶段不读镜像源（改由独立命令按需加载，加快首屏）
-        match manager::detect(def.id, timeout_ms, false, theme) {
-            Ok(info) => out.push(info),
-            Err(e) => out.push(ManagerInfo {
-                id: def.id.to_string(),
-                name: def.name.to_string(),
-                language: def.language.to_string(),
-                tier: def.tier,
-                platforms: crate::whitelist::platform_label(def.platforms).to_string(),
-                platform_applicable: crate::whitelist::platform_applies(def.platforms),
-                detected: false,
-                version: None,
-                exe_path: None,
-                global_root: None,
-                cache_dir: None,
-                config_file: None,
-                registry: None,
-                logo: Some(icons::manager_logo_svg(def.id, def.name, theme)),
-                download_url: Some(def.download_url.to_string()),
-                docs_url: Some(def.docs_url.to_string()),
-                warnings: vec![format!("探测失败: {}", e.message)],
-            }),
-        }
+/// 探测失败时的兜底条目：字段齐全但标记为未检测到，并附上失败原因。
+///
+/// 抽出来是因为并发探测与兜底路径都要用它，重复构造容易漏字段。
+fn fallback_info(def: &crate::whitelist::ManagerDef, theme: icons::Theme, reason: String) -> ManagerInfo {
+    ManagerInfo {
+        id: def.id.to_string(),
+        name: def.name.to_string(),
+        language: def.language.to_string(),
+        tier: def.tier,
+        platforms: crate::whitelist::platform_label(def.platforms).to_string(),
+        platform_applicable: crate::whitelist::platform_applies(def.platforms),
+        detected: false,
+        version: None,
+        exe_path: None,
+        global_root: None,
+        cache_dir: None,
+        config_file: None,
+        registry: None,
+        logo: Some(icons::manager_logo_svg(def.id, def.name, theme)),
+        download_url: Some(def.download_url.to_string()),
+        docs_url: Some(def.docs_url.to_string()),
+        warnings: vec![reason],
     }
-    Ok(out)
+}
+
+/// 并发探测的上限。
+///
+/// 为什么是 6：每个管理器的探测都要起一到两个子进程（`--version` 等）。
+/// 全量是 39 个管理器，如果无限制地并发：
+/// - 会瞬间创建上百个进程，老机器的调度压力很大
+/// - 注册表 PATH 回退、`cargo --version` 这类本身较重的命令会互相拖慢，
+///   反而更容易撞上各自的超时
+///
+/// 6 是"能明显缩短总耗时、又不至于让单条命令变慢"的折中。串行 39 个的
+/// 总耗时基本是逐个相加；6 路并发后接近"最慢的若干条之和"。
+const DETECT_CONCURRENCY: usize = 6;
+
+/// 探测所有已知包管理器（**并发**，单个失败不影响整体）。
+///
+/// 串行改并发的动机：首屏要等所有管理器探测完才出内容，
+/// 而每个管理器都要起进程跑版本命令，串行等于把等待时间全加起来。
+///
+/// 结果按 `MANAGERS` 的原始顺序返回（用下标直接写入预分配数组），
+/// 不依赖线程完成顺序 —— 否则侧边栏顺序会随机变动，看起来很乱。
+fn detect_all(timeout_ms: u64, theme: icons::Theme) -> AppResult<Vec<ManagerInfo>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let defs = &crate::whitelist::MANAGERS;
+    let total = defs.len();
+
+    // 每个下标恰好被一个线程写入，因此这里不能简单用 Vec::with_capacity
+    // （未初始化的槽位在 Rust 里无法安全占位）。先填兜底值，再按下标覆盖。
+    //
+    // 用 Mutex 而不是把 out 直接 move 进多个闭包：闭包各自持有 &mut out 会被
+    // 借用检查器拒绝，而 Mutex 能把这个"按下标写入互不重叠"的事实表达出来
+    // （写锁只在赋值那一瞬间持有，不覆盖探测过程）。
+    let out: Mutex<Vec<ManagerInfo>> = Mutex::new(
+        defs.iter()
+            .map(|def| fallback_info(def, theme, "尚未探测".to_string()))
+            .collect(),
+    );
+
+    let next = AtomicUsize::new(0);
+    let workers = DETECT_CONCURRENCY.min(total);
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    // fetch_add 让各线程自然地领取下一个下标，无需预先分片
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= total {
+                        break;
+                    }
+                    let def = &defs[i];
+                    // 探测阶段不读镜像源（改由独立命令按需加载，加快首屏）。
+                    // 注意：探测本身**不持锁**，否则并发就退化成串行了。
+                    let info = match manager::detect(def.id, timeout_ms, false, theme) {
+                        Ok(info) => info,
+                        Err(e) => fallback_info(def, theme, format!("探测失败: {}", e.message)),
+                    };
+                    if let Ok(mut guard) = out.lock() {
+                        guard[i] = info;
+                    }
+                }
+            });
+        }
+    });
+
+    // 锁中毒只可能来自上面某次写入时 panic，此时返回兜底数据也比整体失败好
+    Ok(out.into_inner().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// 把可能很慢的同步逻辑丢到阻塞线程池
@@ -97,6 +160,89 @@ where
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| AppError::internal(format!("后台任务异常: {e}")))?
+}
+
+#[cfg(test)]
+mod detect_timing {
+    use super::*;
+    use std::time::Instant;
+
+    /// 仅供对照：改动前的串行实现。
+    ///
+    /// 保留它不是为了回退，而是为了**随时能量化并发带来的收益** ——
+    /// 否则"优化了性能"只是一句话，没法验证。
+    fn detect_all_serial(timeout_ms: u64, theme: icons::Theme) -> Vec<ManagerInfo> {
+        crate::whitelist::MANAGERS
+            .iter()
+            .map(|def| {
+                manager::detect(def.id, timeout_ms, false, theme)
+                    .unwrap_or_else(|e| fallback_info(def, theme, format!("探测失败: {}", e.message)))
+            })
+            .collect()
+    }
+
+    /// 计时对比：串行 vs 并发。
+    ///
+    /// 需要真实执行版本命令，因此标 `#[ignore]`，只在想量化时手动跑：
+    ///
+    /// ```text
+    /// cargo test --lib detect_timing -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "需要真实执行版本命令，用于手工量化性能"]
+    fn detect_timing_serial_vs_parallel() {
+        let theme = icons::Theme::Dark;
+
+        // 先串行
+        let t0 = Instant::now();
+        let serial = detect_all_serial(20_000, theme);
+        let serial_ms = t0.elapsed().as_millis();
+
+        // 再并发
+        let t1 = Instant::now();
+        let parallel = detect_all(20_000, theme).expect("并发探测应成功");
+        let parallel_ms = t1.elapsed().as_millis();
+
+        let detected = parallel.iter().filter(|m| m.detected).count();
+        println!("\n=== 探测耗时对比 ===");
+        println!("  管理器总数      : {}", parallel.len());
+        println!("  检测到          : {detected}");
+        println!("  串行            : {serial_ms} ms");
+        println!("  并发（上限 {DETECT_CONCURRENCY}） : {parallel_ms} ms");
+        if parallel_ms > 0 {
+            println!(
+                "  加速比          : {:.2}x",
+                serial_ms as f64 / parallel_ms as f64
+            );
+        }
+
+        // 并发版必须与串行版给出**同样数量、同样顺序**的结果 ——
+        // 并发只该改耗时，不该改语义。
+        assert_eq!(
+            serial.len(),
+            parallel.len(),
+            "并发与串行的结果数量必须一致"
+        );
+        let serial_ids: Vec<&str> = serial.iter().map(|m| m.id.as_str()).collect();
+        let parallel_ids: Vec<&str> = parallel.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(serial_ids, parallel_ids, "结果顺序必须与定义顺序一致");
+
+        // 检测结论也应一致（同一台机器同一时刻，判定不该变）
+        let serial_detected: Vec<&str> = serial
+            .iter()
+            .filter(|m| m.detected)
+            .map(|m| m.id.as_str())
+            .collect();
+        let parallel_detected: Vec<&str> = parallel
+            .iter()
+            .filter(|m| m.detected)
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(
+            serial_detected, parallel_detected,
+            "并发与串行检测到的管理器集合必须一致"
+        );
+    }
 }
 
 /// 从 State 取出探测结果后立即释放 State 借用，便于后续 move 进闭包
@@ -130,6 +276,40 @@ pub fn supported_managers() -> Vec<serde_json::Value> {
             })
         })
         .collect()
+}
+
+/// 读取上次的磁盘快照（首屏秒开用）。
+///
+/// **不触发任何探测**，纯粹把上次保存的状态读出来给界面。
+/// 返回 `null` 表示没有可用快照（首次运行、快照损坏、结构版本不匹配），
+/// 前端此时就照常等真实探测。
+///
+/// 注意这是同步命令且很快（读一个 JSON 文件），因此不必 `spawn_blocking`。
+#[tauri::command]
+pub fn load_snapshot() -> Option<crate::snapshot::Snapshot> {
+    crate::snapshot::load()
+}
+
+/// 保存当前状态为磁盘快照。
+///
+/// 由前端在探测结束 / 扫描结束后调用，存的就是它**正在显示**的那份数据。
+/// 失败不报错（返回 false）：快照只是加速手段，写不进去最多下次启动慢一点，
+/// 不该因此给用户弹错误。
+#[tauri::command]
+pub fn save_snapshot(managers: Vec<ManagerInfo>, report: Option<ScanReport>) -> bool {
+    let snapshot = crate::snapshot::Snapshot {
+        schema: crate::snapshot::SNAPSHOT_SCHEMA,
+        captured_at: chrono::Local::now().to_rfc3339(),
+        managers,
+        report,
+    };
+    crate::snapshot::save(&snapshot)
+}
+
+/// 删除磁盘快照（用户主动"重新探测"时丢掉旧数据）
+#[tauri::command]
+pub fn clear_snapshot() -> AppResult<()> {
+    crate::snapshot::clear()
 }
 
 /// 探测本机包管理器。`force = true` 时忽略缓存重新探测。

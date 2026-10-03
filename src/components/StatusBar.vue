@@ -31,6 +31,28 @@ const currentName = computed(() => {
 })
 const failedIds = computed(() => Object.keys(progress.value.failed))
 
+/**
+ * 是否显示"不确定进度"的转圈。
+ *
+ * 只在**确实没内容可看**时转：
+ * - 静态定义还没读到（`booting`）
+ * - 正在探测，且没有贴过快照（首启就是这种情况，界面全空）
+ *
+ * 反过来说：已经贴了快照（`snapshotApplied`）就**不转** —— 用户眼前有内容，
+ * 后台只是在刷新，转个不停反而让人以为卡住了。那种情况由下面的
+ * `refreshing` 用一个更小的转圈轻量提示。
+ */
+const showSpinner = computed(() => {
+  if (store.scanning) return false
+  if (store.booting) return true
+  return store.detecting && !store.snapshotApplied
+})
+
+const loadingLabel = computed(() => {
+  if (store.booting) return t('nav.loading')
+  return t('toolbar.detecting')
+})
+
 const scanState = computed(() => {
   if (store.detecting) return t('toolbar.detecting')
   if (!store.report) return '—'
@@ -67,15 +89,30 @@ const host = computed(() => {
       {{ t('status.filteredBy', { keyword: store.keyword }) }}
     </span>
 
-    <!-- 右：扫描进度（footer 内，不是独立浮层） -->
-    <div v-if="store.scanning" class="statusbar__progress">
-      <span class="mono statusbar__progress-text">
-        {{ t('toolbar.scanning') }} {{ progress.completed }}/{{ progress.total }}
-        <template v-if="currentName"> · {{ currentName }}</template>
-      </span>
-      <div class="statusbar__bar">
-        <div class="statusbar__bar-fill" :style="{ width: `${percent}%` }" />
-      </div>
+    <!-- 右：加载/刷新状态（footer 内，不是独立浮层） -->
+    <div class="statusbar__progress">
+      <!-- 首次加载：还没有任何数据可显示，用不确定进度的转圈 -->
+      <template v-if="showSpinner">
+        <span class="spinner" />
+        <span class="mono statusbar__progress-text">{{ loadingLabel }}</span>
+      </template>
+
+      <!-- 扫描中：有确定的总数，用进度条 -->
+      <template v-else-if="store.scanning">
+        <span class="mono statusbar__progress-text">
+          {{ t('toolbar.scanning') }} {{ progress.completed }}/{{ progress.total }}
+          <template v-if="currentName"> · {{ currentName }}</template>
+        </span>
+        <div class="statusbar__bar">
+          <div class="statusbar__bar-fill" :style="{ width: `${percent}%` }" />
+        </div>
+      </template>
+
+      <!-- 后台静默刷新：界面已有内容，只用一个细小的转圈提示"正在更新" -->
+      <template v-else-if="store.refreshing">
+        <span class="spinner spinner--sm" />
+        <span class="mono statusbar__progress-text">{{ t('status.refreshing') }}</span>
+      </template>
     </div>
 
     <span v-if="!store.scanning">{{ store.activeManager ?? t('nav.all') }}</span>

@@ -1788,6 +1788,13 @@ table.data tbody tr.is-selected td {
   }
 }
 
+/* 更小的转圈：用于"后台正在静默刷新"这种轻微提示，不抢注意力 */
+.spinner--sm {
+  width: 10px;
+  height: 10px;
+  border-width: 1.5px;
+}
+
 .diff {
   font-family: var(--font-mono);
   font-size: 11.5px;

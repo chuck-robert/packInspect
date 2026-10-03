@@ -30,6 +30,7 @@ pub mod plugins;
 pub mod registry;
 pub mod report;
 pub mod settings;
+pub mod snapshot;
 pub mod validate;
 pub mod whitelist;
 
@@ -45,6 +46,10 @@ pub fn run() {
             commands::run_scan,
             commands::scan_manager,
             commands::get_cache_stats,
+            // 磁盘快照：首屏秒开 + 后台刷新后回写
+            commands::load_snapshot,
+            commands::save_snapshot,
+            commands::clear_snapshot,
             // 镜像源
             commands::get_registry,
             commands::get_all_registries,

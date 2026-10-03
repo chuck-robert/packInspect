@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 左侧导航，分上下两区：
  * - 上区「包管理器」：点击进入该管理器的详情页（而不是直接跳到包列表）
@@ -70,8 +70,16 @@ function versionLabel(manager: ManagerInfo): string {
           <span class="nav__version">{{ versionLabel(manager) }}</span>
         </button>
 
+        <!--
+          已贴快照时不显示"正在探测"：列表里已经有管理器了，
+          再挂一行提示会让人以为还没加载完。后台刷新只由状态栏轻量提示。
+        -->
         <div v-if="store.booting" class="hint" style="padding: 12px 8px">{{ t('nav.loading') }}</div>
-        <div v-else-if="store.detecting" class="hint" style="padding: 12px 8px">
+        <div
+          v-else-if="store.detecting && !store.snapshotApplied && managers.length === 0"
+          class="hint"
+          style="padding: 12px 8px"
+        >
           {{ t('nav.detecting') }}
         </div>
       </nav>

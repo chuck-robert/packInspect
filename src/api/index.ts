@@ -32,6 +32,7 @@ import type {
   RegistryConfig,
   ScanReport,
   ScanRequest,
+  Snapshot,
 } from '@/types'
 
 /** 后端错误归一化：网络层异常也包装成同样的形状 */
@@ -83,6 +84,28 @@ export const api = {
   /** 探测本机包管理器；force = 忽略 5 分钟缓存，theme 决定 logo 配色 */
   detectManagers: (force = false, timeoutMs?: number, theme = 'dark') =>
     call<ManagerInfo[]>('detect_managers', { force, timeoutMs, theme }),
+
+  /* ---------------------------------------------------------------- 磁盘快照 */
+
+  /**
+   * 读取上次保存的快照，用于首屏秒开。
+   *
+   * **不触发任何探测**：纯粹读一个 JSON 文件，几乎瞬时返回。
+   * 返回 null 表示没有可用快照（首次运行 / 快照损坏 / 结构版本不匹配）。
+   */
+  loadSnapshot: () => call<Snapshot | null>('load_snapshot'),
+
+  /**
+   * 保存当前状态为快照。
+   *
+   * 传入的就是界面**正在显示**的那份数据，因此下次恢复出来的一定是用户
+   * 上次看到的样子。后端写失败只返回 false，不抛错 —— 快照只是加速手段。
+   */
+  saveSnapshot: (managers: ManagerInfo[], report: ScanReport | null) =>
+    call<boolean>('save_snapshot', { managers, report }),
+
+  /** 删除快照（用户主动"重新探测"时丢弃旧数据） */
+  clearSnapshot: () => call<void>('clear_snapshot'),
 
   getRegistry: (managerId: string, timeoutMs?: number) =>
     call<RegistryConfig>('get_registry', { managerId, timeoutMs }),

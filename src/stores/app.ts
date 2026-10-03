@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 全局状态。单一 store 足够：数据量不大，且各视图之间强耦合（扫描结果 → 管理页 / 表格 / 缓存 / 清理）。
  */
 
@@ -48,6 +48,18 @@ interface State {
   booting: boolean
   detecting: boolean
   scanning: boolean
+  /**
+   * 是否已经贴上了磁盘快照的数据（本次启动）。
+   *
+   * 用途：状态栏在"探测中"时区分两种含义 ——
+   * 有快照 = 「正在后台刷新」（界面已有内容），
+   * 无快照 = 「正在首次加载」（界面还是空的，得转圈）。
+   */
+  snapshotApplied: boolean
+  /** 快照的采集时间（RFC3339）。null = 当前数据不是来自快照 */
+  snapshotCapturedAt: string | null
+  /** 是否正在后台刷新（有快照数据时的静默刷新） */
+  refreshing: boolean
   /**
    * 渐进扫描进度：按管理器逐个推进，每完成一个就立刻渲染，
    * 用户不必等最慢的管理器（winget/pip 各要几秒）。
@@ -125,6 +137,9 @@ export const useAppStore = defineStore('app', {
     booting: false,
     detecting: false,
     scanning: false,
+    snapshotApplied: false,
+    snapshotCapturedAt: null,
+    refreshing: false,
     scanProgress: { total: 0, completed: 0, current: null, failed: {} },
     lastScannedAt: {},
     showOtherPlatforms: false,
@@ -474,22 +489,86 @@ export const useAppStore = defineStore('app', {
     },
 
     // ---------------------------------------------------------------- 数据加载
-    /** 首屏：先渲染静态定义，再后台探测 */
+    /**
+     * 首屏加载：**先贴缓存，再后台刷新**。
+     *
+     * 【为什么这么排】
+     * 冷启动若直接跑探测（并发后约 1.6 秒）+ 全量扫描（数秒），界面会空着
+     * 很长一段时间。改成：
+     *   1. `load_snapshot` 读上次保存的状态 → 立即渲染（几乎瞬时）
+     *   2. 后台照常探测 → 拿到新结果后替换
+     *   3. 若配置了启动扫描，再后台扫描 → 扫描完替换并回写快照
+     *
+     * 用户看到的是「打开就有内容，随后自己更新」，而不是「盯着转圈」。
+     *
+     * 注意 `boot()` 在探测返回后就 resolve，**不等待后台扫描**：
+     * 调用方（App.vue）不必为一个可能持续数秒的扫描阻塞。
+     */
     async boot(scanOnStartup: boolean, theme = 'dark') {
       this.booting = true
       this.error = null
-      try {
-        this.supported = await api.supportedManagers()
+
+      // 1) 静态定义与快照并行取：两者互不依赖，串行只是白白多等一轮
+      const [supportedResult, snapshotResult] = await Promise.allSettled([
+        api.supportedManagers(),
+        api.loadSnapshot(),
+      ])
+
+      if (supportedResult.status === 'fulfilled') {
+        this.supported = supportedResult.value
         this.pushLog(`已加载 ${this.supported.length} 个包管理器定义`)
-      } catch (e) {
-        this.handleError(e, '加载管理器定义')
-      } finally {
-        this.booting = false
+      } else {
+        this.handleError(supportedResult.reason, '加载管理器定义')
       }
-      await this.detect(false, theme)
-      if (scanOnStartup && this.installed.length > 0) {
-        // 启动即扫描 → 默认落在「包管理」页时列表就已经有数据
-        await this.scan({ measureSize: false, silent: true })
+
+      // 2) 立刻贴快照，让界面第一时间有东西
+      const snapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null
+      if (snapshot && snapshot.managers.length > 0) {
+        this.managers = snapshot.managers
+        this.snapshotCapturedAt = snapshot.capturedAt
+        this.snapshotApplied = true
+        if (snapshot.report) {
+          this.report = snapshot.report
+          this.caches = [...snapshot.report.caches]
+        }
+        this.pushLog(
+          `已载入上次快照（${snapshot.capturedAt}）：${snapshot.managers.filter((m) => m.detected).length} 个管理器` +
+            (snapshot.report ? `，${snapshot.report.totalPackages} 个包` : '，尚无扫描数据'),
+        )
+      }
+      this.booting = false
+
+      // 3) 后台刷新：探测定罪，然后把新数据写回快照
+      this.refreshing = true
+      try {
+        await this.detect(false, theme)
+
+        // 4) 启动扫描（默认关；开启时也走"先把旧的显示着，扫完再换"）
+        if (scanOnStartup && this.installed.length > 0) {
+          await this.scan({ measureSize: false, silent: true })
+        } else {
+          // 没扫描也要保存：探测拿到的新版本号本身就有价值
+          await this.persistSnapshot()
+        }
+      } finally {
+        this.refreshing = false
+        // 刷新完成，快照时间戳不再代表"当前数据"
+        this.snapshotApplied = false
+      }
+    },
+
+    /**
+     * 把界面当前的数据写回磁盘快照。
+     *
+     * 存的就是 store 里**正在显示**的这份状态，因此下次恢复出来的一定与用户
+     * 上次看到的一致。失败不提示：快照只是加速手段，写不进去最多下次启动慢点。
+     */
+    async persistSnapshot() {
+      if (this.managers.length === 0) return
+      try {
+        await api.saveSnapshot(this.managers, this.report)
+      } catch {
+        // 刻意静默：见上方注释
       }
     },
 
@@ -540,6 +619,22 @@ export const useAppStore = defineStore('app', {
           this.cleanPhase = 'idle'
           this.pluginsCache = {}
           this.actionsCache = {}
+          // 强制重新探测意味着放弃旧结论。已有报告里的包是按**上次探测到**的
+          // 管理器读出来的，探测结果一变它们就可能已经过时，因此一并清掉，
+          // 避免界面显示"某管理器的包"、但该管理器这次根本没被检测到。
+          // 调用方（工具栏的重新探测）随后会重新扫描。
+          if (this.report) {
+            this.report = {
+              ...this.report,
+              packages: [],
+              caches: [],
+              totalPackages: 0,
+              totalCacheBytes: 0,
+            }
+            this.caches = []
+          }
+          this.snapshotApplied = false
+          this.snapshotCapturedAt = null
         }
       } catch (e) {
         this.handleError(e, '探测包管理器')
@@ -551,10 +646,15 @@ export const useAppStore = defineStore('app', {
     /**
      * 执行扫描。
      *
-     * 采用**逐管理器渐进式**扫描而非一次性全量：
-     * 调用 `scan_manager` 一个一个来，每完成一个就把结果并进 report，
-     * 界面上立即能看到该管理器的包 —— 用户不必盯着空白页等最慢的那个
-     * （winget 要几秒、pip 要几秒、cargo 可能要十几秒）。
+     * 采用**有上限并发 + 渐进渲染**：
+     * - 并发：同时最多 `SCAN_CONCURRENCY` 个管理器在扫，总耗时从"逐个相加"
+     *   降到接近"最慢的几个之和"。上限压得比探测低，因为 npm/pip 这类工具
+     *   会写自己的缓存目录，太多进程同时读同一个缓存并不安全。
+     * - 渐进：每完成一个就（节流地）把结果并进 report，界面上立即能看到，
+     *   用户不必等最慢的那个（winget 几秒、cargo 可能十几秒）。
+     * - 节流：重建 report 要对整个包列表排序，全量 39 个管理器重建 39 次
+     *   纯属浪费，因此压到最多每帧一次。
+     *
      * 进度写入 `scanProgress`，由底部状态栏渲染进度条。
      *
      * `measureSize` 会逐个目录统计体积，明显更慢，因此作为可选开关。
@@ -600,7 +700,7 @@ export const useAppStore = defineStore('app', {
       const measure = options.measureSize ?? false
 
       /**
-       * 把已收集到的内容组装成 report（每扫完一个管理器就重建一次）。
+       * 把已收集到的内容组装成 report。
        *
        * 注意 `managers` 用的是**并集**：既要保留未参与本次扫描的管理器，
        * 也要包含本次扫到的。只写 `targets` 会让管理器列表随扫描范围缩水。
@@ -626,36 +726,79 @@ export const useAppStore = defineStore('app', {
         }
       }
 
+      /**
+       * 节流渲染：每个管理器扫完都重建 report 的话，全量 39 个管理器要重建
+       * 39 次，而每次都要对整个包列表排序（O(n log n)）。包多的时候这一项
+       * 本身就成了可观的耗时，而且大多次重建用户根本来不及看。
+       *
+       * 这里把它压到最多每帧一次：既保留"边扫边出"的体感，又避免无谓排序。
+       */
+      let rebuildScheduled = false
+      const scheduleRebuild = () => {
+        if (rebuildScheduled) return
+        rebuildScheduled = true
+        requestAnimationFrame(() => {
+          rebuildScheduled = false
+          rebuildReport()
+        })
+      }
+
+      /**
+       * 扫描并发上限。
+       *
+       * 每个管理器的扫描都会起子进程读包列表。全量 39 个若一次性并发，
+       * 会对 npm/pip 这类会写缓存的工具有并发副作用（多个进程同时读同一缓存目录），
+       * 因此上限压得比探测低。4 路既能明显缩短总耗时，又足够保守。
+       */
+      const SCAN_CONCURRENCY = 4
+
       try {
-        for (const managerId of targets) {
-          this.scanProgress.current = managerId
-          try {
-            const result = await api.scanManager(managerId, measure, 30_000)
-            if (result.ok) {
-              collectedPackages.push(...result.packages)
-              if (result.cache) collectedCaches.push(result.cache)
-              // 记录时效，避免下次打开该管理器时重复扫描
-              this.lastScannedAt[managerId] = Date.now()
-            } else if (result.reason) {
-              this.scanProgress.failed[managerId] = result.reason
+        // 工作窃取式并发：线程池里的每个"工人"自己取下标的活儿
+        let cursor = 0
+        const worker = async () => {
+          for (;;) {
+            const index = cursor++
+            if (index >= targets.length) return
+            const managerId = targets[index]
+            this.scanProgress.current = managerId
+            try {
+              const result = await api.scanManager(managerId, measure, 30_000)
+              if (result.ok) {
+                collectedPackages.push(...result.packages)
+                if (result.cache) collectedCaches.push(result.cache)
+                // 记录时效，避免下次打开该管理器时重复扫描
+                this.lastScannedAt[managerId] = Date.now()
+              } else if (result.reason) {
+                this.scanProgress.failed[managerId] = result.reason
+              }
+              // 无论成功与否都立即（节流）渲染，让用户看到进度
+              scheduleRebuild()
+            } catch (e) {
+              const err = e instanceof IpcError ? e : IpcError.from(e)
+              this.scanProgress.failed[managerId] = err.message
+              this.pushLog(`扫描 ${managerId} 失败: ${err.message}`)
+            } finally {
+              this.scanProgress.completed += 1
             }
-            // 无论成功与否都立即渲染，让用户看到进度
-            rebuildReport()
-          } catch (e) {
-            const err = e instanceof IpcError ? e : IpcError.from(e)
-            this.scanProgress.failed[managerId] = err.message
-            this.pushLog(`扫描 ${managerId} 失败: ${err.message}`)
-          } finally {
-            this.scanProgress.completed += 1
           }
         }
 
+        const workers = Array.from(
+          { length: Math.min(SCAN_CONCURRENCY, targets.length) },
+          () => worker(),
+        )
+        await Promise.all(workers)
+
+        // 收尾时补一次同步重建：节流的那次可能还挂在下一帧上，
+        // 不补的话扫描结束瞬间 report 可能还是少一个管理器的旧值。
+        rebuildReport()
         this.scanProgress.current = null
         const report = this.report
         const failedCount = Object.keys(this.scanProgress.failed).length
         this.pushLog(
-          `渐进扫描完成：${report?.totalPackages ?? 0} 个包，缓存 ${report?.totalCacheBytes ?? 0} 字节，` +
-            `耗时 ${report?.durationMs ?? 0} ms，失败 ${failedCount} 个管理器`,
+          `并发扫描完成（上限 ${SCAN_CONCURRENCY}）：${report?.totalPackages ?? 0} 个包，` +
+            `缓存 ${report?.totalCacheBytes ?? 0} 字节，耗时 ${report?.durationMs ?? 0} ms，` +
+            `失败 ${failedCount} 个管理器`,
         )
 
         if (!options.silent) {
@@ -665,6 +808,10 @@ export const useAppStore = defineStore('app', {
             `扫描完成，共 ${report?.totalPackages ?? 0} 个包${measure ? '（含体积统计）' : ''}${suffix}`,
           )
         }
+
+        // 扫描结束 → 把新结果落盘，下次启动直接有这份数据。
+        // 放在这里而不是 finally：扫描失败时不该用半截数据覆盖好快照。
+        await this.persistSnapshot()
       } catch (e) {
         this.handleError(e, '扫描')
       } finally {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 后端数据结构镜像。
  *
  * ⚠️ 与 `src-tauri/src/models.rs` 一一对应（Rust 侧 `rename_all = "camelCase"`）。
@@ -162,6 +162,22 @@ export interface ScanRequest {
   managers?: string[]
   measurePackageSize?: boolean
   timeoutMs?: number
+}
+
+/**
+ * 磁盘快照：后端持久化的"上次状态"，用于首屏秒开。
+ *
+ * 由前端在探测/扫描结束后保存它**正在显示**的那份数据，因此恢复出来
+ * 一定与用户上次看到的一致。
+ */
+export interface Snapshot {
+  /** 结构版本；后端版本不匹配时会直接丢弃快照 */
+  schema: number
+  /** 采集时间（RFC3339） */
+  capturedAt: string
+  managers: ManagerInfo[]
+  /** 可能为 null：上次从未扫描过 */
+  report: ScanReport | null
 }
 
 export interface CleanRequest {
