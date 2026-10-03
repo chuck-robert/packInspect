@@ -157,6 +157,31 @@ winget、cargo、dotnet 等生态把用户可读的名称放在这里，而 `nam
 | 镜像源 | **左侧列出全部管理器**，右侧显示选中项的配置与「当前生效源」 |
 | 设置 | 语言（中/英）、主题、启动扫描 + 运行环境 + 安全模型 + **关于** |
 
+### 在线浏览能力（全部实跑验证过）
+
+| 生态 | 端点 | 关键词搜索 | 备注 |
+|---|---|---|---|
+| npm / pnpm / yarn | registry.npmjs.org/-/v1/search | ✅ | 展示月下载量 |
+| cargo | crates.io/api/v1/crates | ✅ | |
+| dotnet | azuresearch-usnc.nuget.org/query | ✅ | |
+| composer | packagist.org/search.json | ✅ | |
+| gem | rubygems.org/api/v1/search.json | ✅ | |
+| dart | pub.dev/api/search | ✅ | 列表接口只有包名，无版本 |
+| powershellget | PowerShell Gallery OData (Atom XML) | ✅ | 版本取 NormalizedVersion（Version 是 NuGet 范围格式） |
+| winget | 本地 `winget search` | ✅ | 已过滤 msstore 的 Store ID 条目 |
+| pip | pypi.org/pypi/&lt;name&gt;/json | ❌ **精确名查询** | PyPI 搜索页由 JS 渲染、无公开 JSON 搜索 API |
+| conda / maven / chocolatey / scoop / luarocks / cpan | — | — | 尚未接入，界面会明确说明而不是显示空结果 |
+
+后端返回 `BrowseResult` 而不是裸数组，用来区分三种情况，界面据此给出不同提示：
+**真的没有匹配** / **网络失败（附原因）** / **该生态不支持关键词搜索**。
+一律显示「没有找到匹配的包」是最误导用户的做法。
+
+搜索框旁边的提示条会说明当前生态的限制（例如 pip 需输入完整包名）。
+
+**回归验证**：`cargo test --lib browse_ecosystems_online -- --ignored --nocapture`
+会对上表 9 个生态各实搜一次并打印首条结果。上游改字段名这类问题只有实跑才能发现 ——
+本轮修的 4 个 bug 里有 3 个正是如此。
+
 ### 渐进式扫描
 
 扫描不是「一次全量、等最慢的那个」，而是**逐个管理器推进**：
