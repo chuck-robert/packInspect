@@ -1,4 +1,4 @@
-﻿# PackInspect
+# PackInspect
 
 本机包环境扫描工具。检测多种包管理器、列出已安装包、统计缓存占用、读写镜像源配置、
 导出报告，并提供**安全的缓存清理**。技术栈：**Vue 3 + TypeScript + Vite** 前端，
@@ -116,8 +116,28 @@ src-tauri/target/release/bundle/portable/PackInspect/
 
 ### 窗口外观
 
-`decorations: false` + `shadow: false`：自绘标题栏，并**关掉 Windows 给无边框窗口加的
-DWM 投影** —— 默认那圈阴影比普通桌面应用重得多，观感很"浮"。
+`decorations: false` + `shadow: true`：自绘标题栏，同时保留 Windows 给无边框窗口加的
+标准 DWM 投影。
+
+关于 `shadow` 的取舍（两种都试过）：
+
+| 取值 | 效果 |
+|---|---|
+| `true` | 标准窗口投影，与其它桌面应用一致（**当前采用**） |
+| `false` | 完全没有投影，窗口边缘是硬切的黑边，观感偏"残缺" |
+
+Tauri 只提供开/关两态，**没有"轻一点"的档位**：它直接映射到 DWM 的投影，
+强度由系统决定（Windows 11 下约为 `36px` 模糊、`0.3` 不透明度）。
+若确实想自定义强度，只能走 `transparent: true` + CSS `box-shadow` ——
+代价是失去 DWM 的原生圆角与投影，且透明窗口在 Windows 上有已知渲染问题，不建议。
+
+`windowEffects`（mica / acrylic / blur）是另一类效果，**需要透明窗口**，
+不是"更轻的投影"，不要用它来替代 `shadow`。
+
+> 验证教训：**不要靠屏幕截图判断窗口阴影**。本项目的调试环境里前台窗口会覆盖采样点，
+> 窗口超出屏幕时 `CopyFromScreen` 还会用白色填充，两次三番给出错误结论。
+> 要判断投影应查 DWM 属性（`DwmGetWindowAttribute` 的 `DWMWA_EXTENDED_FRAME_BOUNDS`），
+> 或直接交给用户确认。
 
 ### 打包时容易踩的坑
 
