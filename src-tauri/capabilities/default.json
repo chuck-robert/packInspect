@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "PackInspect 主窗口权限。注意：本应用不启用 shell 插件，所有系统命令均由 Rust 侧安全执行器调用。",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "dialog:allow-save",
+    "dialog:allow-open"
+  ]
+}
