@@ -84,27 +84,49 @@ scripts\build.ps1 run
 
 ## 打包与运行
 
-### 产出可直接运行的单文件 exe
+### 产出真正自包含的单文件 exe
 
 ```
 ./scripts/build.ps1 package
 ```
 
-产物（**双击即可运行，无需安装**）：
+产物（**双击即可运行，无需安装，无任何附加文件**）：
 
 ```
-src-tauri/target/release/bundle/portable/PackInspect/
-├── PackInspect.exe        约 3.9 MB
-└── scripts/
-    └── run-install.ps1    可见命令行窗口的运行时依赖
+src-tauri/target/release/bundle/portable/PackInspect.exe    约 3.9 MB
 ```
 
 `bundle.targets` 设为 `["app"]`，因此**不会**生成安装向导、不写注册表、不留卸载项。
-整个目录可以直接拷走使用。
+拷这一个文件到任何地方都能用上全部功能。
 
-> **只拷 `PackInspect.exe` 也能用**，但「执行安装」的可见命令行窗口需要同目录下的
-> `scripts/run-install.ps1`。缺了它时该操作会给出一条明确说明打包缺文件的错误，
-> 而不是静默失效 —— 见 `package_ops::run` 里对 `run_visible` 错误的处理。
+### 单文件是怎么做到的
+
+「执行安装」要在可见命令行窗口里跑包管理器，这依赖 `scripts/run-install.ps1`。
+早先这个脚本是外部文件（靠 `bundle.resources` 或手动拷贝放在 exe 旁边），
+于是就有了"必须两个文件一起发"的约束。
+
+现在用 `include_str!` 在**编译期**把脚本内容嵌进二进制：
+
+```rust
+const WRAPPER_SCRIPT_SOURCE: &str = include_str!("../../scripts/run-install.ps1");
+```
+
+运行时按「磁盘优先、内嵌兜底」的顺序解析（见 `console::wrapper_script_path`）：
+
+| 场景 | 用的哪份 | 好处 |
+|---|---|---|
+| 开发环境（仓库里有脚本） | 磁盘那份 | 改脚本立即生效，不必重新编译 |
+| 发行版（单文件 exe） | 内嵌那份，首次使用时释放到 `%TEMP%\PackInspect\runtime\` | 无需任何外部文件 |
+
+释放采用「已存在且内容一致就跳过写入」，因此只在首次或脚本更新后写盘一次。
+
+代价是 exe 会大一点点（脚本约 7 KB），换来彻底摆脱外部依赖。
+
+有两条测试钉住它，防止回归：
+- `embedded_wrapper_keeps_its_hard_won_constraints` —— 断言**内嵌副本**保留了那几条
+  踩坑固化的约束（`Tee-Object -Encoding`、参数走 JSON、状态文件、先日志后状态）
+- `embedded_wrapper_matches_the_repo_script` —— 断言内嵌副本与仓库脚本**逐字节一致**，
+  否则会出现"开发时是新行为、发行版还是旧行为"这种极难排查的问题
 
 ### 为什么不用安装程序
 

@@ -45,10 +45,7 @@
     "copyright": "© 2026 PackInspect",
     "category": "DeveloperTool",
     "shortDescription": "本地包环境扫描工具",
-    "longDescription": "扫描本机 pip / npm / pnpm / yarn 等包管理器的已安装包、缓存占用与镜像源配置，支持在线搜索与安装、导出报告与安全清理缓存。",
-    "resources": {
-      "../scripts/run-install.ps1": "scripts/run-install.ps1"
-    }
+    "longDescription": "扫描本机 pip / npm / pnpm / yarn 等包管理器的已安装包、缓存占用与镜像源配置，支持在线搜索与安装、导出报告与安全清理缓存。"
   },
   "plugins": {}
 }

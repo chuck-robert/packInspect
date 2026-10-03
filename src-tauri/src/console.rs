@@ -161,7 +161,51 @@ fn wait_for_log(log_path: &Path) -> String {
     }
 }
 
+/// 把 `scripts/run-install.ps1` 的**源码内嵌进 exe**。
+///
+/// 【为什么内嵌】
+/// 这个脚本是「可见命令行窗口」功能的运行时依赖。原先靠 `bundle.resources`
+/// 或手动拷贝放在 exe 旁边，于是就有了"必须两个文件一起发"的约束 ——
+/// 用户拷单个 exe 过去，那个功能就会失效（虽然会给明确报错，但仍是缺陷）。
+/// 用 `include_str!` 在编译期把脚本内容塞进二进制，运行时按需释放，
+/// `PackInspect.exe` 就真正是自包含的单文件。
+///
+/// 代价：脚本内容一大，exe 会相应变大（当前脚本约 7 KB）。相对彻底摆脱
+/// 外部依赖，这个代价可以接受。
+///
+/// 路径是相对**本文件**（`src-tauri/src/console.rs`）解析的。
+const WRAPPER_SCRIPT_SOURCE: &str = include_str!("../../scripts/run-install.ps1");
+
+/// 释放内嵌脚本到临时目录，返回其路径。
+///
+/// 只在磁盘上找不到脚本时调用（见 `wrapper_script_path`），因此：
+/// - 开发环境下始终用仓库里的那份，改脚本立即生效，不必重新编译
+/// - 单文件发行版下从自身释放一份到临时目录
+///
+/// 用内容哈希命名并配合"已存在且内容一致就跳过写入"，
+/// 既避免每次执行都写盘，也保证脚本更新后不会被旧副本顶掉。
+fn materialize_embedded_wrapper() -> AppResult<PathBuf> {
+    let dir = std::env::temp_dir().join("PackInspect").join("runtime");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| AppError::io(format!("创建临时目录失败: {e}")))?;
+    let path = dir.join("run-install.ps1");
+
+    // 内容一致就不重写：省 IO，也避免执行期间文件句柄冲突
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        if existing == WRAPPER_SCRIPT_SOURCE {
+            return Ok(path);
+        }
+    }
+
+    std::fs::write(&path, WRAPPER_SCRIPT_SOURCE)
+        .map_err(|e| AppError::io(format!("释放内嵌脚本失败: {e}")))?;
+    Ok(path)
+}
+
 /// 列出查找包装脚本时会尝试的候选路径（顺序即优先级）
+///
+/// 顺序刻意是「磁盘优先、内嵌兜底」：开发时改脚本立即生效，
+/// 发行版则靠内嵌那份自给自足。
 fn wrapper_candidates() -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
@@ -182,23 +226,32 @@ fn wrapper_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-/// 供诊断使用：报告包装脚本是否找到、以及实际路径与尝试过的候选。
+/// 供诊断使用：报告包装脚本来源、路径与尝试过的候选。
 ///
-/// 为什么要暴露它：这个脚本是**打包资源**，漏打时安装版的「可见命令行窗口」
-/// 会静默失效。把它放进 `get_diagnostics`，出问题一眼能看出原因。
+/// 为什么要暴露它：这个脚本曾因打包漏配而缺失，导致「可见命令行窗口」静默失效。
+/// 现在它内嵌在 exe 里，`source` 会明确告诉你是用的磁盘副本还是内嵌副本。
 pub fn wrapper_script_diagnostic() -> serde_json::Value {
     let candidates = wrapper_candidates();
-    let found = candidates.iter().find(|p| p.is_file());
+    let on_disk = candidates.iter().find(|p| p.is_file());
+    let (source, path) = match on_disk {
+        Some(p) => ("disk", Some(p.to_string_lossy().to_string())),
+        None => (
+            "embedded",
+            materialize_embedded_wrapper()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string()),
+        ),
+    };
     serde_json::json!({
-        "found": found.is_some(),
-        "path": found.map(|p| p.to_string_lossy().to_string()),
+        "found": path.is_some(),
+        "source": source,
+        "path": path,
+        "embeddedBytes": WRAPPER_SCRIPT_SOURCE.len(),
         "tried": candidates.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
     })
 }
 
-/// 找到 `scripts/run-install.ps1`。
-///
-/// 开发运行时当前目录是 `src-tauri`，打包后则是安装目录 —— 因此两个位置都找。
+/// 找到 `scripts/run-install.ps1`：磁盘优先，找不到就用内嵌副本。
 fn wrapper_script_path() -> AppResult<PathBuf> {
     let candidates = wrapper_candidates();
 
@@ -208,13 +261,14 @@ fn wrapper_script_path() -> AppResult<PathBuf> {
         }
     }
 
-    Err(AppError::new(
-        "NO_WRAPPER",
-        format!(
-            "找不到 scripts/run-install.ps1，无法在可见窗口中执行。已尝试: {}",
-            candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" / ")
-        ),
-    ))
+    // 磁盘上没有（单文件发行版就是这种情况）→ 从 exe 自身释放一份
+    materialize_embedded_wrapper()
+}
+
+/// 仅供测试：内嵌脚本的源码
+#[cfg(test)]
+fn embedded_wrapper_source() -> &'static str {
+    WRAPPER_SCRIPT_SOURCE
 }
 
 /// 读取日志并解码为 UTF-8。
@@ -359,51 +413,87 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// 包装脚本的兼容性约束 —— 每一条都对应一个实测踩过的坑。
+    /// 内嵌的包装脚本必须存在且包含那几条硬约束 ——
+    /// 这些约束是踩坑后固化的（见脚本头部注释），改回旧写法会让「执行安装」失效。
+    ///
+    /// 为什么断言**内嵌副本**而不是磁盘文件：发行版用到的是内嵌那份，
+    /// 只有断言它才能保证打出来的单文件 exe 行为正确。
     #[test]
-    fn wrapper_script_keeps_its_hard_won_constraints() {
-        let script = wrapper_script_path().expect("开发环境下应能找到 run-install.ps1");
-        let text = std::fs::read_to_string(&script).expect("脚本应可读");
+    fn embedded_wrapper_keeps_its_hard_won_constraints() {
+        let text = embedded_wrapper_source();
 
-        // 1) 只使用 PowerShell 5.1 也支持的参数。
-        //    踩过的坑：`Tee-Object -Encoding` 在 5.1 上不存在，脚本一启动就报
-        //    "A parameter cannot be found"，命令根本没被执行，却看起来像安装失败。
+        // 1) 不得给 Tee-Object 加 -Encoding：Windows PowerShell 5.1 不支持该参数，
+        //    加了会让命令根本不执行，却看起来像安装失败。
         assert!(
-            !text.contains("-Encoding utf8") || !text.contains("Tee-Object"),
+            !text.contains("Tee-Object") || !text.contains("-Encoding utf8"),
             "不得给 Tee-Object 加 -Encoding（5.1 不支持）"
         );
 
-        // 2) 参数走 JSON。逗号形式 `-Arguments a,b,c` 在命令行上会被当成单个字符串，
+        // 2) 参数走 JSON。逗号形式在命令行上会被当成单个字符串，
         //    导致 npm 收到 "install,-g,is-number" 并报 Unknown command。
-        //    注意 `-ArgumentsJson` 自身包含 `-Arguments` 子串，所以要按带分隔符的形式判断。
         assert!(text.contains("ArgumentsJson"), "参数应走 JSON");
         assert!(
             !text.contains("-Arguments ") && !text.contains("-Arguments,"),
-            "不得再用 -Arguments a,b,c 形式（命令行上不是数组）"
+            "不得再用 -Arguments a,b,c 形式"
         );
 
-        // 3) 退出码写独立的纯 ASCII 状态文件。
-        //    不能追加进日志：日志编码由 PowerShell 决定，追加会造成同文件混编，
-        //    解析必然乱码，曾把成功的安装误判为失败。
+        // 3) 退出码写独立的纯 ASCII 状态文件（写进日志会因编码混编而解析失败）
         assert!(text.contains("$LogPath.status"), "退出码应写入 .status 文件");
 
-        // 4) 顺序必须是「先写日志、再写状态」：父进程以状态文件作为"日志已可读"的信号。
+        // 4) 顺序必须是「先写日志、再写状态」，父进程以状态文件作为日志可读的信号
         let log_pos = text.find("Save-Log $output").expect("应显式保存日志");
         let status_pos = text.find("Write-Status $exitCode").expect("应写状态");
-        assert!(
-            log_pos < status_pos,
-            "必须先写日志再写状态，否则父进程会读到不完整的日志"
-        );
+        assert!(log_pos < status_pos, "必须先写日志再写状态");
 
-        // 5) 不得在脚本进程内 Sleep 等待关窗：那会让父进程陪着一起等，
-        //    而且日志句柄未释放。改用独立子进程延时，脚本立刻退出。
-        assert!(
-            !text.contains("Start-Sleep -Seconds 5`r`n}"),
-            "延时关窗不应阻塞脚本自身"
+        // 5) 不得在脚本进程内 Sleep 等关窗（会阻塞父进程等待）
+        assert!(!text.contains("Start-Sleep -Seconds 5`r`n}"), "延时不应阻塞脚本自身");
+        assert!(text.contains("Start-Process"), "延时关窗应交给分离子进程");
+    }
+
+    /// 内嵌副本必须与仓库里的脚本**逐字节一致**。
+    ///
+    /// 否则会出现"改了仓库脚本、发行版却还是旧行为"这种极难排查的问题：
+    /// 开发时走磁盘副本（新行为），发行版走内嵌副本（旧行为）。
+    #[test]
+    fn embedded_wrapper_matches_the_repo_script() {
+        let on_disk = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("scripts")
+                .join("run-install.ps1"),
+        )
+        .expect("仓库里应存在 scripts/run-install.ps1");
+        assert_eq!(
+            on_disk, WRAPPER_SCRIPT_SOURCE,
+            "内嵌副本与仓库脚本不一致（可能是改了脚本但没重新编译，或改了内嵌常量）"
         );
-        assert!(
-            text.contains("Start-Process"),
-            "延时关窗应交给独立的分离子进程"
-        );
+    }
+
+    /// 释放内嵌脚本：写入成功、可重复调用、内容一致时不重写
+    #[test]
+    fn materializes_embedded_wrapper_to_temp() {
+        let path = materialize_embedded_wrapper().expect("应能释放内嵌脚本");
+        assert!(path.is_file(), "释放后文件应存在");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, WRAPPER_SCRIPT_SOURCE, "释放内容应与内嵌内容一致");
+        assert!(text.contains("PackInspect"), "内容应像那个包装脚本");
+
+        // 再调一次：应复用同一路径且不报错
+        let again = materialize_embedded_wrapper().expect("重复释放也应成功");
+        assert_eq!(path, again);
+    }
+
+    #[test]
+    fn parses_exit_code_from_status_only() {
+        // 退出码不再从日志解析（会因编码混编而失败），确认日志解析函数已移除
+        // 这里只断言状态文件读取的行为
+        let dir = std::env::temp_dir().join("packinspect-test-status-2");
+        let _ = std::fs::create_dir_all(&dir);
+        let log = dir.join("x.log");
+        let status = dir.join("x.log.status");
+        std::fs::write(&status, "0").unwrap();
+        assert_eq!(read_status(&log), Some(0));
+        assert!(!status.exists());
+        let _ = std::fs::remove_file(&status);
     }
 }

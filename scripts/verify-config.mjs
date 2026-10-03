@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 校验 JSON 配置文件**不带 UTF-8 BOM**。
  *
  * 为什么需要这条检查（真实踩过的坑）：
@@ -66,29 +66,36 @@ try {
 }
 
 if (conf) {
-  // resources 里列的文件必须真实存在，否则装完会缺文件、功能静默失效
+  // resources 里列的文件（如有）必须真实存在
   const resources = conf.bundle?.resources ?? {}
   const entries = Object.entries(resources)
+  for (const [src] of entries) {
+    const abs = join(root, 'src-tauri', src)
+    const ok = existsSync(abs)
+    console.log(`  ${ok ? '✅' : '❌'} resource 存在: ${src}`)
+    if (!ok) failed++
+  }
   if (entries.length === 0) {
-    console.log('  ⚠️  bundle.resources 为空 —— 若有运行时需要的脚本，安装版会缺少它们')
-  } else {
-    for (const [src] of entries) {
-      const abs = join(root, 'src-tauri', src)
-      const ok = existsSync(abs)
-      console.log(`  ${ok ? '✅' : '❌'} resource 存在: ${src}`)
-      if (!ok) failed++
-    }
+    console.log('  ·  未配置 bundle.resources（运行时脚本已内嵌进 exe，无需外部文件）')
   }
 
-  // 运行时会去 <安装目录>/scripts/ 找这些脚本，必须与 package_ops/console 的查找路径一致
-  const expected = [
-    'scripts/run-install.ps1',
-  ]
-  for (const want of expected) {
-    const listed = entries.some(([, dest]) => dest === want || dest.endsWith(want))
-    console.log(`  ${listed ? '✅' : '❌'} 已打包运行时脚本: ${want}`)
-    if (!listed) failed++
+  // 运行时脚本必须被**内嵌**：单文件 exe 靠 include_str! 自给自足。
+  // 同时校验脚本文件存在与 include_str! 指向它 —— 两者缺一，
+  // 发行版的「执行安装」就会失败。
+  const scriptPath = join(root, 'scripts', 'run-install.ps1')
+  const scriptOk = existsSync(scriptPath)
+  console.log(`  ${scriptOk ? '✅' : '❌'} 运行时脚本存在: scripts/run-install.ps1`)
+  if (!scriptOk) failed++
+
+  let embedded = false
+  try {
+    const src = readFileSync(join(root, 'src-tauri', 'src', 'console.rs'), 'utf8')
+    embedded = /include_str!\(\s*"\.\.\/\.\.\/scripts\/run-install\.ps1"\s*\)/.test(src)
+  } catch {
+    /* 下面会报错 */
   }
+  console.log(`  ${embedded ? '✅' : '❌'} 脚本已用 include_str! 内嵌（单文件 exe 依赖它）`)
+  if (!embedded) failed++
 
   // 图标文件必须真实存在，否则打包会失败或退回默认图标
   const icons = conf.bundle?.icon ?? []
@@ -114,7 +121,8 @@ if (conf) {
     }
   }
 
-  // 向导相关字段名容易写成 Tauri v1 的（oneClick 等），这里直接校验未知字段
+  // 向导相关字段名容易写成 Tauri v1 的（oneClick 等），这里直接校验未知字段。
+  // 当前用 app target、没有 nsis 段，因此仅在配置了它的时候才检查。
   const allowedNsis = new Set([
     'template', 'headerImage', 'sidebarImage', 'installerIcon', 'uninstallerIcon',
     'uninstallerHeaderImage', 'installMode', 'languages', 'customLanguageFiles',
@@ -125,8 +133,10 @@ if (conf) {
   if (unknown.length > 0) {
     console.log(`  ❌ nsis 里有 Tauri v2 不认的字段（很可能是 v1 的写法）: ${unknown.join(', ')}`)
     failed++
-  } else {
+  } else if (Object.keys(nsis).length > 0) {
     console.log('  ✅ nsis 字段全部为 Tauri v2 认可的键')
+  } else {
+    console.log('  ·  未配置 bundle.windows.nsis（当前用 app target，无安装向导）')
   }
 }
 

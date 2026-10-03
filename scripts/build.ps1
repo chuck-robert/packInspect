@@ -114,35 +114,29 @@ if ($Task -eq 'package') {
         exit $code
     }
 
-    # 组装便携目录：exe + 运行时脚本，双击即可运行
+    # 组装发行目录：只有一个自包含的 exe
+    #
+    # 为什么不再附带 scripts\run-install.ps1：
+    # 该脚本已用 include_str! 在编译期内嵌进 exe，运行时按需释放到临时目录。
+    # 因此 PackInspect.exe 是真正自包含的 —— 拷单个文件走就能用全部功能。
     $builtExe = Join-Path $repoRoot 'src-tauri\target\release\packinspect.exe'
     if (-not (Test-Path $builtExe)) {
         Write-Host "  ✗ 没找到打包产物：$builtExe" -ForegroundColor Red
         exit 1
     }
-    $portable = Join-Path $repoRoot 'src-tauri\target\release\bundle\portable\PackInspect'
+    $portable = Join-Path $repoRoot 'src-tauri\target\release\bundle\portable'
     if (Test-Path $portable) { Remove-Item $portable -Recurse -Force -ErrorAction SilentlyContinue }
     [void](New-Item -ItemType Directory -Path $portable -Force)
 
     # 用产品名命名 exe：产物叫 packinspect.exe 是 crate 名，用户看到的应是 PackInspect.exe
-    Copy-Item $builtExe (Join-Path $portable 'PackInspect.exe') -Force
-    $scriptsSrc = Join-Path $repoRoot 'scripts\run-install.ps1'
-    if (Test-Path $scriptsSrc) {
-        $scriptsDst = Join-Path $portable 'scripts'
-        [void](New-Item -ItemType Directory -Path $scriptsDst -Force)
-        Copy-Item $scriptsSrc $scriptsDst -Force
-    }
+    $finalExe = Join-Path $portable 'PackInspect.exe'
+    Copy-Item $builtExe $finalExe -Force
 
+    $sizeMB = [math]::Round((Get-Item $finalExe).Length / 1MB, 2)
     Write-Host ''
-    Write-Host '  ✓ 便携版已生成（双击 PackInspect.exe 即可运行，无需安装）' -ForegroundColor Green
-    Write-Host "    目录：$portable" -ForegroundColor DarkGray
-    Get-ChildItem $portable -Recurse -File | ForEach-Object {
-        $rel = $_.FullName.Substring($portable.Length + 1)
-        Write-Host ("      {0,-28} {1,7} KB" -f $rel, [math]::Round($_.Length / 1KB, 1)) -ForegroundColor DarkGray
-    }
-    Write-Host ''
-    Write-Host '    提示：只拷 PackInspect.exe 也能用，但「执行安装」的可见命令行窗口' -ForegroundColor DarkGray
-    Write-Host '          需要同目录下的 scripts\run-install.ps1。' -ForegroundColor DarkGray
+    Write-Host '  ✓ 单文件版已生成（双击 PackInspect.exe 即可运行，无需安装、无附加文件）' -ForegroundColor Green
+    Write-Host "    $finalExe" -ForegroundColor DarkGray
+    Write-Host "    大小：$sizeMB MB（已内嵌运行时脚本，拷单个文件即可用全部功能）" -ForegroundColor DarkGray
     Write-Host ''
     exit 0
 }
