@@ -298,17 +298,5 @@
     "settings.showOtherPlatforms":  "显示其它平台的包管理器",
     "settings.showOtherPlatformsHint":  "打开后会列出当前系统上无法使用的管理器（例如 Windows 上的 apt、brew、CocoaPods）。默认关闭，因为它们在你这台机器上永远检测不到。",
     "platform.notApplicable":  "本系统不适用",
-    "platform.notApplicableHint":  "{name} 只在 {platforms} 上可用，当前系统不支持。",
-    "nav.install":  "安装包",
-    "install.repo":  "仓库",
-    "install.noRepo":  "没有可用的仓库。请先在「包管理器」里确认某个管理器已检测到。",
-    "install.searchTitle":  "搜索可安装的包",
-    "install.placeholder":  "在 {manager} 的仓库中搜索…",
-    "install.results":  "搜索结果",
-    "install.plan":  "安装方案",
-    "install.planAction":  "准备安装",
-    "install.prompt":  "输入关键词后按回车开始搜索。",
-    "install.lastResult":  "上次执行结果",
-    "install.succeeded":  "成功",
-    "install.failed":  "失败"
+    "platform.notApplicableHint":  "{name} 只在 {platforms} 上可用，当前系统不支持。"
 }

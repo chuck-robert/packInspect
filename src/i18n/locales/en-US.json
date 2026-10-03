@@ -298,17 +298,5 @@
     "settings.showOtherPlatforms":  "Show managers for other platforms",
     "settings.showOtherPlatformsHint":  "Lists managers that cannot work on this system (e.g. apt, brew, CocoaPods on Windows). Off by default — they will never be detected on this machine.",
     "platform.notApplicable":  "not for this OS",
-    "platform.notApplicableHint":  "{name} is only available on {platforms}, which this system is not.",
-    "nav.install":  "Install",
-    "install.repo":  "Repository",
-    "install.noRepo":  "No repository available. Check that a manager is detected on the Packages page first.",
-    "install.searchTitle":  "Search installable packages",
-    "install.placeholder":  "Search the {manager} registry…",
-    "install.results":  "Results",
-    "install.plan":  "Install plan",
-    "install.planAction":  "Prepare install",
-    "install.prompt":  "Type a keyword and press Enter to search.",
-    "install.lastResult":  "Last run",
-    "install.succeeded":  "succeeded",
-    "install.failed":  "failed"
+    "platform.notApplicableHint":  "{name} is only available on {platforms}, which this system is not."
 }

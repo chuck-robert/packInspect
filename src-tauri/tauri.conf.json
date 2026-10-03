@@ -22,7 +22,7 @@
         "center": true,
         "decorations": false,
         "transparent": false,
-        "shadow": true
+        "shadow": false
       }
     ],
     "security": {
@@ -34,7 +34,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": ["app"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -48,17 +48,6 @@
     "longDescription": "扫描本机 pip / npm / pnpm / yarn 等包管理器的已安装包、缓存占用与镜像源配置，支持在线搜索与安装、导出报告与安全清理缓存。",
     "resources": {
       "../scripts/run-install.ps1": "scripts/run-install.ps1"
-    },
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser",
-        "languages": ["SimpChinese", "English"],
-        "displayLanguageSelector": true,
-        "installerIcon": "icons/icon.ico",
-        "uninstallerIcon": "icons/icon.ico",
-        "startMenuFolder": "PackInspect",
-        "compression": "lzma"
-      }
     }
   },
   "plugins": {}

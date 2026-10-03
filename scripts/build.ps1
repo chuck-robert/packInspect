@@ -75,10 +75,17 @@ if (-not $toolchain.Ok) {
 }
 
 # ---------------------------------------------------------------------------
-# package：产出安装程序（NSIS 向导式）
+# package：产出可**直接运行的单文件 exe**（便携版）
 # ---------------------------------------------------------------------------
-# 打包前先跑一次 verify：配置类问题（BOM、缺 resources、v1 字段名）在这里
-# 报错比在 tauri build 里报错清楚得多，而且打包要几分钟，早失败更省时间。
+# 为什么是 app 而不是 nsis：
+# 用户要的是「打包完直接双击运行」的东西，而不是还要走安装向导、选目录的安装程序。
+# Tauri 的 `app` target 正好产出单文件 exe，无安装步骤、不改注册表、不留卸载项。
+#
+# 但单文件 exe 有个硬约束：`scripts/run-install.ps1` 是「可见命令行窗口」功能的
+# 运行时依赖，而 app target **不会**把 bundle.resources 放到 exe 旁边。
+# 因此这里主动把 exe 与 scripts 组装成一个便携目录：
+#   只发 exe → 除"执行安装"外全部功能可用（该功能会给明确错误提示，不会静默失效）
+#   连 scripts 一起发 → 全部功能可用
 if ($Task -eq 'package') {
     Write-Host ''
     Write-Host '  ▶ 打包前先做配置校验' -ForegroundColor Cyan
@@ -107,17 +114,35 @@ if ($Task -eq 'package') {
         exit $code
     }
 
-    # 把产物路径明确打出来 —— tauri 的输出夹在一堆编译日志里，不好找
-    $bundleDir = Join-Path $repoRoot 'src-tauri\target\release\bundle'
-    $setup = Get-ChildItem $bundleDir -Recurse -Filter '*-setup.exe' -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    Write-Host ''
-    if ($setup) {
-        Write-Host "  ✓ 安装程序：$($setup.FullName)" -ForegroundColor Green
-        Write-Host "    大小：$([math]::Round($setup.Length / 1MB, 2)) MB" -ForegroundColor DarkGray
-    } else {
-        Write-Host '  ✓ 打包完成，但没找到 *-setup.exe，请检查 bundle 目录' -ForegroundColor Yellow
+    # 组装便携目录：exe + 运行时脚本，双击即可运行
+    $builtExe = Join-Path $repoRoot 'src-tauri\target\release\packinspect.exe'
+    if (-not (Test-Path $builtExe)) {
+        Write-Host "  ✗ 没找到打包产物：$builtExe" -ForegroundColor Red
+        exit 1
     }
+    $portable = Join-Path $repoRoot 'src-tauri\target\release\bundle\portable\PackInspect'
+    if (Test-Path $portable) { Remove-Item $portable -Recurse -Force -ErrorAction SilentlyContinue }
+    [void](New-Item -ItemType Directory -Path $portable -Force)
+
+    # 用产品名命名 exe：产物叫 packinspect.exe 是 crate 名，用户看到的应是 PackInspect.exe
+    Copy-Item $builtExe (Join-Path $portable 'PackInspect.exe') -Force
+    $scriptsSrc = Join-Path $repoRoot 'scripts\run-install.ps1'
+    if (Test-Path $scriptsSrc) {
+        $scriptsDst = Join-Path $portable 'scripts'
+        [void](New-Item -ItemType Directory -Path $scriptsDst -Force)
+        Copy-Item $scriptsSrc $scriptsDst -Force
+    }
+
+    Write-Host ''
+    Write-Host '  ✓ 便携版已生成（双击 PackInspect.exe 即可运行，无需安装）' -ForegroundColor Green
+    Write-Host "    目录：$portable" -ForegroundColor DarkGray
+    Get-ChildItem $portable -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($portable.Length + 1)
+        Write-Host ("      {0,-28} {1,7} KB" -f $rel, [math]::Round($_.Length / 1KB, 1)) -ForegroundColor DarkGray
+    }
+    Write-Host ''
+    Write-Host '    提示：只拷 PackInspect.exe 也能用，但「执行安装」的可见命令行窗口' -ForegroundColor DarkGray
+    Write-Host '          需要同目录下的 scripts\run-install.ps1。' -ForegroundColor DarkGray
     Write-Host ''
     exit 0
 }

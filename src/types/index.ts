@@ -215,7 +215,7 @@ export type CleanPhase = 'idle' | 'previewing' | 'previewed' | 'executing' | 'do
  * 而不是直接跳到包列表 —— 这样用户先看到「它是什么、装在哪、版本多少」，
  * 再从分页进入包列表 / 浏览安装 / 管理操作。
  */
-export type ViewKey = 'manage' | 'manager' | 'install' | 'cache' | 'registry' | 'settings'
+export type ViewKey = 'manage' | 'manager' | 'cache' | 'registry' | 'settings'
 
 /** 管理器详情页内的分页 */
 export type ManagerTab = 'overview' | 'packages' | 'browse' | 'manage'

@@ -2,7 +2,7 @@
 /**
  * 左侧导航，分上下两区：
  * - 上区「包管理器」：点击进入该管理器的详情页（而不是直接跳到包列表）
- * - 下区「工具」：安装 / 缓存占用 / 镜像源 / 设置
+ * - 下区「工具」：缓存占用 / 镜像源 / 设置
  *
  * 用 flex 布局让下区贴底，上区独立滚动 —— 管理器最多 20 个，列表会超出一屏。
  */
@@ -17,12 +17,6 @@ const store = useAppStore()
 const { t } = useI18n()
 
 const tools: { key: ViewKey; labelKey: string; icon: string }[] = [
-  {
-    // 安装放在工具区第一位：这是最常用的"任务"，不该埋进某个管理器的分页里
-    key: 'install',
-    labelKey: 'nav.install',
-    icon: 'M10 3v9M6 8.5l4 4 4-4M3.5 16.5h13',
-  },
   {
     key: 'cache',
     labelKey: 'nav.cache',

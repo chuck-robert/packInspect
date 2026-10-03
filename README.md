@@ -1,4 +1,4 @@
-﻿# PackInspect
+# PackInspect
 
 本机包环境扫描工具。检测多种包管理器、列出已安装包、统计缓存占用、读写镜像源配置、
 导出报告，并提供**安全的缓存清理**。技术栈：**Vue 3 + TypeScript + Vite** 前端，
@@ -82,45 +82,51 @@ scripts\build.ps1 run
 > 或 PATH 不含 npm 时会直接失败并中断构建。直接 `cargo run` 等效且少一层依赖 ——
 > Tauri 二进制会自己读取 `build.devUrl` 连接已运行的 Vite。
 
-## 打包与安装
+## 打包与运行
 
-### 产出安装程序
+### 产出可直接运行的单文件 exe
 
 ```
-./scripts/build.ps1 package       # 或直接 npx tauri build
+./scripts/build.ps1 package
 ```
 
-产物：`src-tauri/target/release/bundle/nsis/PackInspect_<版本>_x64-setup.exe`（约 1.4 MB）。
+产物（**双击即可运行，无需安装**）：
 
-### 安装界面（NSIS 向导）
+```
+src-tauri/target/release/bundle/portable/PackInspect/
+├── PackInspect.exe        约 3.9 MB
+└── scripts/
+    └── run-install.ps1    可见命令行窗口的运行时依赖
+```
 
-Tauri v2 的 NSIS 安装程序**本身就是向导式**，包含：
+`bundle.targets` 设为 `["app"]`，因此**不会**生成安装向导、不写注册表、不留卸载项。
+整个目录可以直接拷走使用。
 
-| 页面 | 内容 |
-|---|---|
-| 语言选择 | 简体中文 / English（`displayLanguageSelector`） |
-| 欢迎 | 说明与「下一步」 |
-| **选择安装位置** | 可改目录，显示可用空间与所需空间 |
-| 安装进度 | 进度条 + 逐项日志（解压缩、创建快捷方式、写注册表） |
-| 完成 | 「PackInspect 已经成功安装到本机」 |
+> **只拷 `PackInspect.exe` 也能用**，但「执行安装」的可见命令行窗口需要同目录下的
+> `scripts/run-install.ps1`。缺了它时该操作会给出一条明确说明打包缺文件的错误，
+> 而不是静默失效 —— 见 `package_ops::run` 里对 `run_visible` 错误的处理。
 
-已安装 / 重装时会进入**维护页**，可选「添加/重新安装组件」或「卸载 PackInspect」。
+### 为什么不用安装程序
 
-截图见 docs/screenshots/installer-*.png；可用 `scripts/walk-installer.ps1` 自动走查并逐页截图。
+早先配过 NSIS 向导（欢迎页 / 选目录 / 进度 / 完成 + 维护页），功能正常且逐页实测过，
+但用户要的是「打包后直接运行」。单文件 exe 没有安装步骤，也没有"装到哪去了"的疑问。
+如果以后需要分发安装包，把 `bundle.targets` 改回 `["nsis"]` 并补回
+`bundle.windows.nsis` 段即可（注意字段名是 Tauri **v2** 的，
+`oneClick` / `allowToChangeInstallationDirectory` 那类 v1 字段会导致构建失败）。
 
-安装行为：
-- `installMode: currentUser` —— 装到 `%LOCALAPPDATA%\PackInspect`，**不需要管理员权限**
-- 自动创建开始菜单与桌面快捷方式
-- 卸载通过「设置 → 应用」或安装目录下的 `uninstall.exe`
+### 窗口外观
+
+`decorations: false` + `shadow: false`：自绘标题栏，并**关掉 Windows 给无边框窗口加的
+DWM 投影** —— 默认那圈阴影比普通桌面应用重得多，观感很"浮"。
 
 ### 打包时容易踩的坑
 
 | 坑 | 症状 | 防回退 |
 |---|---|---|
-| 漏配 `bundle.resources` | 装完少了 `scripts/run-install.ps1`，「执行安装」的可见命令行窗口失效 | `verify-config.mjs` 断言该脚本已列入 resources |
 | `tauri.conf.json` 被写入 UTF-8 **BOM** | 构建报 `expected value at line 1 column 1`，看起来像文件为空 | `verify-config.mjs` 扫描所有 JSON 的 BOM |
-| 把 Tauri **v1** 的 NSIS 字段名（`oneClick` / `allowToChangeInstallationDirectory` / `createDesktopShortcut`）写进 v2 配置 | 构建报 `is not valid under any of the schemas` | `verify-config.mjs` 校验 nsis 字段是否都在 v2 白名单内 |
-| 打包时用 PowerShell 改 `tauri.conf.json` | 同上（`Set-Content -Encoding utf8` 会加 BOM） | 同上 |
+| 把 Tauri **v1** 的 NSIS 字段名写进 v2 配置 | 构建报 `is not valid under any of the schemas` | `verify-config.mjs` 校验 nsis 字段是否都在 v2 白名单内（仅当配了 `bundle.windows.nsis` 时） |
+| 用 PowerShell 改 `tauri.conf.json` | 同上（`Set-Content -Encoding utf8` 会加 BOM） | 同上 |
+| 图标文件缺失 | 打包失败或退回默认图标 | `verify-config.mjs` 断言 bundle.icon 与 installerIcon 都存在 |
 
 ### 图标
 
@@ -283,7 +289,8 @@ winget、cargo、dotnet 等生态把用户可读的名称放在这里，而 `nam
 
 ### 3.1 更新 / 卸载 / 安装：真实可执行
 
-**两个入口，同一套约束。** 唯一会改动环境的命令是 un_package_op：
+**两个入口，同一套约束。** 唯一会改动环境的命令是 
+un_package_op：
 
 | 入口 | 动作 |
 |---|---|
