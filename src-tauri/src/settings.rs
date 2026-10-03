@@ -1,4 +1,4 @@
-//! 设置持久化与受控的外部链接打开。
+﻿//! 设置持久化与受控的外部链接打开。
 //!
 //! 设置存放于 `%APPDATA%/PackInspect/settings.json`（macOS/Linux 为对应的配置目录），
 //! 采用「读取失败即回退默认值」的宽松策略：配置文件损坏不应让应用起不来。
@@ -44,6 +44,10 @@ pub fn load() -> AppSettings {
                 .unwrap_or("dark")
                 .to_string(),
             scan_on_startup: value.get("scanOnStartup").and_then(|v| v.as_bool()).unwrap_or(true),
+            show_other_platforms: value
+                .get("showOtherPlatforms")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
         },
         _ => AppSettings::default(),
     }
@@ -63,6 +67,7 @@ pub fn save(settings: &AppSettings) -> AppResult<String> {
         "language": settings.language,
         "theme": settings.theme,
         "scanOnStartup": settings.scan_on_startup,
+        "showOtherPlatforms": settings.show_other_platforms,
     });
     let text = serde_json::to_string_pretty(&payload)
         .map_err(|e| AppError::internal(format!("序列化设置失败: {e}")))?;

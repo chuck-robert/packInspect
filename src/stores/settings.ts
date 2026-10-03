@@ -6,6 +6,7 @@
  */
 
 import { defineStore } from 'pinia'
+import { useAppStore } from '@/stores/app'
 import { api, IpcError } from '@/api'
 import type { AppSettings } from '@/types'
 
@@ -24,6 +25,7 @@ const DEFAULTS: AppSettings = {
   language: 'zh-CN',
   theme: 'dark',
   scanOnStartup: true,
+  showOtherPlatforms: false,
 }
 
 export const useSettingsStore = defineStore('settings', {
@@ -71,6 +73,20 @@ export const useSettingsStore = defineStore('settings', {
       }
     },
 
+    /**
+     * 把与「列表展示」相关的设置同步给 app store。
+     *
+     * 为什么不让 app store 直接读 settings store：两个 store 互相 import 会形成
+     * 循环依赖。这里由设置侧单向推送，职责也更清楚。
+     */
+    syncToList() {
+      try {
+        useAppStore().showOtherPlatforms = this.settings.showOtherPlatforms
+      } catch {
+        /* 应用尚未初始化时忽略 */
+      }
+    },
+
     async load() {
       try {
         const loaded = await api.getSettings()
@@ -82,6 +98,7 @@ export const useSettingsStore = defineStore('settings', {
       } finally {
         this.loaded = true
         this.applyTheme()
+        this.syncToList()
       }
     },
 
@@ -89,6 +106,8 @@ export const useSettingsStore = defineStore('settings', {
     patch(partial: Partial<AppSettings>) {
       this.settings = { ...this.settings, ...partial }
       if (partial.theme !== undefined) this.applyTheme()
+      // 列表展示类设置要立刻生效，不用等保存
+      if (partial.showOtherPlatforms !== undefined) this.syncToList()
     },
 
     async persist(): Promise<{ ok: boolean; message?: string }> {

@@ -294,5 +294,9 @@
     "browse.execute":  "执行安装",
     "browse.executeHint":  "可以直接执行安装，也可以复制命令自行运行。执行前会再弹一次确认，并显示将运行的确切命令。",
     "ops.logPath":  "执行日志",
-    "ops.consoleNote":  "执行时会打开一个命令行窗口，你可以实时看到下载与安装进度；窗口 5 秒后自动关闭，完整输出也会保存在下面的日志文件里。"
+    "ops.consoleNote":  "执行时会打开一个命令行窗口，你可以实时看到下载与安装进度；窗口 5 秒后自动关闭，完整输出也会保存在下面的日志文件里。",
+    "settings.showOtherPlatforms":  "显示其它平台的包管理器",
+    "settings.showOtherPlatformsHint":  "打开后会列出当前系统上无法使用的管理器（例如 Windows 上的 apt、brew、CocoaPods）。默认关闭，因为它们在你这台机器上永远检测不到。",
+    "platform.notApplicable":  "本系统不适用",
+    "platform.notApplicableHint":  "{name} 只在 {platforms} 上可用，当前系统不支持。"
 }

@@ -294,5 +294,9 @@
     "browse.execute":  "Install now",
     "browse.executeHint":  "You can install directly or copy the command. A confirmation shows the exact command before anything runs.",
     "ops.logPath":  "Log file",
-    "ops.consoleNote":  "A console window opens so you can watch download and install progress live. It closes after 5 seconds; the full output is also saved to the log file shown below."
+    "ops.consoleNote":  "A console window opens so you can watch download and install progress live. It closes after 5 seconds; the full output is also saved to the log file shown below.",
+    "settings.showOtherPlatforms":  "Show managers for other platforms",
+    "settings.showOtherPlatformsHint":  "Lists managers that cannot work on this system (e.g. apt, brew, CocoaPods on Windows). Off by default — they will never be detected on this machine.",
+    "platform.notApplicable":  "not for this OS",
+    "platform.notApplicableHint":  "{name} is only available on {platforms}, which this system is not."
 }

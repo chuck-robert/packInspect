@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 全局状态。单一 store 足够：数据量不大，且各视图之间强耦合（扫描结果 → 管理页 / 表格 / 缓存 / 清理）。
  */
 
@@ -70,6 +70,14 @@ interface State {
    * 用户会觉得「包还在重新加载」。
    */
   lastScannedAt: Record<string, number>
+  /**
+   * 是否列出「当前系统不适用」的包管理器（如 Windows 上的 apt / brew）。
+   *
+   * 由 settings store 同步进来，而不是在这里直接依赖它 ——
+   * 两个 store 互相 import 会形成循环。默认关闭：这些管理器永远检测不到，
+   * 列出来只会稀释真正可用的那部分。
+   */
+  showOtherPlatforms: boolean
   loadingCandidates: boolean
   savingRegistry: boolean
 
@@ -117,6 +125,7 @@ export const useAppStore = defineStore('app', {
     scanning: false,
     scanProgress: { total: 0, completed: 0, current: null, failed: {} },
     lastScannedAt: {},
+    showOtherPlatforms: false,
     loadingCandidates: false,
     savingRegistry: false,
     view: 'manage',
@@ -148,8 +157,16 @@ export const useAppStore = defineStore('app', {
      * 不再按「期数」分组 —— 阶段标签已从界面移除。
      */
     sidebarManagers(s): ManagerInfo[] {
-      return [...s.managers].sort(
-        (a, b) => Number(b.detected) - Number(a.detected) || a.name.localeCompare(b.name),
+      // 平台不适用的默认不列出：Windows 上永远检测不到 apt / brew，
+      // 让它们占据侧边栏只会稀释真正可用的那部分（用户可在设置里打开）
+      const list = s.showOtherPlatforms
+        ? [...s.managers]
+        : s.managers.filter((m) => m.platformApplicable)
+      return list.sort(
+        (a, b) =>
+          Number(b.detected) - Number(a.detected) ||
+          (a.platformApplicable === b.platformApplicable ? 0 : a.platformApplicable ? -1 : 1) ||
+          a.name.localeCompare(b.name),
       )
     },
 
@@ -178,8 +195,9 @@ export const useAppStore = defineStore('app', {
       if (!keyword) return []
       const hits: SearchHit[] = []
 
-      // 1) 包管理器
+      // 1) 包管理器（平台不适用的不参与搜索，否则会跳到一个本机不可能有的页面）
       for (const manager of s.managers) {
+        if (!manager.platformApplicable && !s.showOtherPlatforms) continue
         if (matchesKeyword([manager.name, manager.id, manager.language], keyword)) {
           hits.push({
             kind: 'manager',

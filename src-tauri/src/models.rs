@@ -15,8 +15,13 @@ pub struct ManagerInfo {
     pub name: String,
     /// 所属语言生态：node / python / rust / dotnet / windows ...
     pub language: String,
-    /// 优先级阶段：1 = 一期可用，2/3 = 后续阶段（界面弱化展示）
+    /// 优先级阶段：1 = 一期可用，2/3/4 = 后续阶段（界面弱化展示）
     pub tier: u8,
+    /// 该管理器适用的平台说明，例如「仅 Linux」「macOS / Linux」
+    pub platforms: String,
+    /// 是否适用于**当前**操作系统。false = 这东西本机不可能有，
+    /// 界面要说明原因，而不是提示「未在 PATH 中找到」。
+    pub platform_applicable: bool,
     /// 是否在本机检测到可执行文件
     pub detected: bool,
     /// `--version` 输出（已清理首行）
@@ -321,6 +326,9 @@ pub struct AppSettings {
     pub theme: String,
     /// 是否在启动时自动扫描
     pub scan_on_startup: bool,
+    /// 是否列出「当前系统不适用」的包管理器（如 Windows 上的 apt / brew）。
+    /// 默认关闭：这些管理器永远检测不到，列出来只会干扰阅读。
+    pub show_other_platforms: bool,
 }
 
 impl Default for AppSettings {
@@ -329,6 +337,7 @@ impl Default for AppSettings {
             language: "zh-CN".to_string(),
             theme: "dark".to_string(),
             scan_on_startup: true,
+            show_other_platforms: false,
         }
     }
 }

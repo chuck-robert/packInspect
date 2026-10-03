@@ -1,4 +1,4 @@
-﻿//! Tauri command 层：前端唯一的入口。
+//! Tauri command 层：前端唯一的入口。
 //!
 //! 约定：
 //! - 所有命令都**不接收命令行字符串**，只接收结构化参数（manager id / 配置键 / 绝对路径）
@@ -69,6 +69,8 @@ fn detect_all(timeout_ms: u64, theme: icons::Theme) -> AppResult<Vec<ManagerInfo
                 name: def.name.to_string(),
                 language: def.language.to_string(),
                 tier: def.tier,
+                platforms: crate::whitelist::platform_label(def.platforms).to_string(),
+                platform_applicable: crate::whitelist::platform_applies(def.platforms),
                 detected: false,
                 version: None,
                 exe_path: None,

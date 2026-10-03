@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 包管理器详情页。
  *
@@ -115,10 +115,24 @@ watch(
               <span v-if="manager.detected" class="tag tag--ok">
                 {{ manager.version ?? t('manage.installed') }}
               </span>
+              <!-- 平台不适用时不说「未检测到」：那是"你没装"，而这里是"本机没有这东西" -->
+              <span v-else-if="!manager.platformApplicable" class="tag tag--warn">
+                {{ t('platform.notApplicable') }}
+              </span>
               <span v-else class="tag tag--danger">{{ t('manage.missing') }}</span>
             </div>
             <div class="manager-header__sub mono" :title="manager.exePath ?? ''">
-              {{ manager.exePath ?? t('manage.notDetectedHint') }}
+              <template v-if="manager.platformApplicable">
+                {{ manager.exePath ?? t('manage.notDetectedHint') }}
+              </template>
+              <template v-else>
+                {{
+                  t('platform.notApplicableHint', {
+                    name: manager.name,
+                    platforms: manager.platforms,
+                  })
+                }}
+              </template>
             </div>
           </div>
           <span class="panel__spacer" />

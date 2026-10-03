@@ -1,4 +1,4 @@
-//! 包管理器探测：定位可执行文件、版本、全局根目录、缓存目录、配置文件。
+﻿//! 包管理器探测：定位可执行文件、版本、全局根目录、缓存目录、配置文件。
 
 use crate::error::AppResult;
 use crate::executor;
@@ -23,8 +23,22 @@ pub fn detect(
     let def = whitelist::find(id).ok_or_else(|| crate::error::AppError::invalid(format!("不支持: {id}")))?;
     let mut warnings: Vec<String> = Vec::new();
 
-    let exe = executor::resolve_executable(def.exe_candidates);
-    if exe.is_none() {
+    // 平台不适用的管理器：说清楚"本机不可能有"，而不是谎报"未在 PATH 中找到"。
+    // 这两句话对用户的意义完全不同：前者是正常现象，后者会让人怀疑自己装错了。
+    let applicable = whitelist::platform_applies(def.platforms);
+    let exe = if applicable {
+        executor::resolve_executable(def.exe_candidates)
+    } else {
+        None
+    };
+    if !applicable {
+        warnings.push(format!(
+            "{} 只在 {} 上可用，本机（{}）不适用",
+            def.name,
+            whitelist::platform_label(def.platforms),
+            whitelist::CURRENT_OS
+        ));
+    } else if exe.is_none() {
         warnings.push(format!("未在 PATH 中找到 {}", def.exe_candidates.join(" / ")));
     }
 
@@ -79,6 +93,8 @@ pub fn detect(
         name: def.name.to_string(),
         language: def.language.to_string(),
         tier: def.tier,
+        platforms: whitelist::platform_label(def.platforms).to_string(),
+        platform_applicable: applicable,
         detected: exe.is_some(),
         version,
         exe_path: exe.map(|p| p.to_string_lossy().to_string()),

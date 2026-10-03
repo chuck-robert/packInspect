@@ -69,8 +69,19 @@ function download(manager: ManagerInfo) {
             <ManagerLogo :manager-id="manager.id" :name="manager.name" size="sm" />
             <span class="manager-card__name">{{ manager.name }}</span>
             <span class="tag">{{ manager.language }}</span>
+            <!-- 平台标记：让用户一眼看出这个管理器是不是属于当前系统 -->
+            <span
+              v-if="!manager.platformApplicable"
+              class="tag tag--warn"
+              :title="t('platform.notApplicableHint', { name: manager.name, platforms: manager.platforms })"
+            >
+              {{ t('platform.notApplicable') }}
+            </span>
             <span class="panel__spacer" />
-            <span class="dot" :class="manager.detected ? 'dot--ok' : 'dot--missing'" />
+            <span
+              class="dot"
+              :class="manager.detected ? 'dot--ok' : 'dot--missing'"
+            />
           </header>
 
           <div class="manager-card__body">
@@ -99,11 +110,28 @@ function download(manager: ManagerInfo) {
             </template>
 
             <template v-else>
-              <div class="manager-card__missing">
-                <span>{{ t('manage.missing') }}</span>
-                <span class="hint">{{ t('manage.notDetectedHint') }}</span>
+              <!--
+                平台不适用时给出真正的理由：这东西在你这个系统上不存在，
+                而不是"你没装"。否则用户会一直在 Windows 上找怎么装 apt。
+              -->
+              <div v-if="!manager.platformApplicable" class="manager-card__missing">
+                <span>{{ t('platform.notApplicable') }}</span>
+                <span class="hint">
+                  {{
+                    t('platform.notApplicableHint', {
+                      name: manager.name,
+                      platforms: manager.platforms,
+                    })
+                  }}
+                </span>
               </div>
-              <div v-if="manager.warnings.length" class="hint">{{ manager.warnings[0] }}</div>
+              <template v-else>
+                <div class="manager-card__missing">
+                  <span>{{ t('manage.missing') }}</span>
+                  <span class="hint">{{ t('manage.notDetectedHint') }}</span>
+                </div>
+                <div v-if="manager.warnings.length" class="hint">{{ manager.warnings[0] }}</div>
+              </template>
             </template>
           </div>
 

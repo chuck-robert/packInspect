@@ -1,21 +1,36 @@
-//! 包管理器注册表 + 命令白名单。
+﻿//! 包管理器注册表 + 命令白名单。
 //!
 //! 【安全核心】前端永远不能传命令行字符串，只能传 `{ manager, op }`。
 //! 这里定义每个 (manager, op) 对应的**静态参数数组**，Rust 侧据此拼装 `Command`。
 //! 参数里出现的一切动态值都必须先过 `validate` 校验。
 //!
-//! 支持范围按三期规划：
-//! - 一期（可用）：pip / npm / pnpm / yarn / cargo / dotnet(nuget) / winget
+//! 支持范围按生态族划分，`tier` 只用于界面上的大致排序：
+//! - 一期：pip / npm / pnpm / yarn / cargo / dotnet(nuget) / winget
 //! - 二期：PowerShellGet / composer / gem / go / maven
 //! - 三期：chocolatey / scoop / conda / dart(pub) / luarocks / cpan
+//! - 四期：Gradle / vcpkg / Conan / bun / deno / pipx / opam / dub / nimble /
+//!   cabal / stack / Julia / mix(Hex) 等语言与构建工具
+//! - 系统级：brew / apt / pacman / dnf / yum / flatpak / snap / CocoaPods / SPM
+//!   （这些**只在对应操作系统上存在**，见 `platforms`）
 
 /// 一个包管理器的静态定义
 pub struct ManagerDef {
     pub id: &'static str,
     pub name: &'static str,
     pub language: &'static str,
-    /// 优先级阶段：1 = 一期，2 = 二期，3 = 三期（界面用「即将支持」弱化展示）
+    /// 优先级阶段：1 = 一期，2 = 二期，3 = 三期，4 = 四期
     pub tier: u8,
+    /// **适用平台**，取值只能是下列之一：
+    /// - `"all"`  全平台
+    /// - `"win"`  仅 Windows
+    /// - `"macos"` 仅 macOS
+    /// - `"linux"` 仅 Linux
+    /// - `"unix"`  macOS 与 Linux（不含 Windows）
+    ///
+    /// 为什么必须显式标注：`apt` / `pacman` / `brew` / `CocoaPods` 这类管理器
+    /// 在 Windows 上**不可能存在**。若不标注，界面会显示「未在 PATH 中找到 apt」——
+    /// 用户会以为是自己环境有问题，而不是"这东西本来就不在这个系统上"。
+    pub platforms: &'static str,
     /// 候选可执行文件名（按优先级）。
     /// Node 生态写作 `xxx.cmd` 优先：Windows 上真正的入口是批处理，`.ps1` 无法被直接执行。
     pub exe_candidates: &'static [&'static str],
@@ -31,6 +46,43 @@ pub struct ManagerDef {
     pub docs_url: &'static str,
 }
 
+/// 当前运行的操作系统代号，与 `ManagerDef::platforms` 的取值对应
+pub const CURRENT_OS: &str = if cfg!(target_os = "windows") {
+    "win"
+} else if cfg!(target_os = "macos") {
+    "macos"
+} else {
+    "linux"
+};
+
+/// 该管理器的 `platforms` 声明是否适用于当前系统
+pub fn platform_applies(platforms: &str) -> bool {
+    match platforms {
+        "all" => true,
+        // unix 覆盖 macOS 与 Linux，但不含 Windows
+        "unix" => cfg!(any(target_os = "macos", target_os = "linux")),
+        other => other == CURRENT_OS,
+    }
+}
+
+/// 给用户看的平台说明（用于「本系统不适用」的提示）
+pub fn platform_label(platforms: &str) -> &'static str {
+    match platforms {
+        "all" => "全部平台",
+        "win" => "仅 Windows",
+        "macos" => "仅 macOS",
+        "linux" => "仅 Linux",
+        "unix" => "macOS / Linux",
+        _ => "未知平台",
+    }
+}
+
+/// 该管理器是否适用于当前系统
+pub fn applies_here(id: &str) -> bool {
+    find(id).map(|d| platform_applies(d.platforms)).unwrap_or(false)
+}
+
+
 pub static MANAGERS: &[ManagerDef] = &[
     // ======================= 一期 =======================
     ManagerDef {
@@ -38,6 +90,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "npm",
         language: "node",
         tier: 1,
+        platforms: "all",
         exe_candidates: &["npm.cmd", "npm.exe", "npm"],
         ops: &[
             ("version", &["--version"]),
@@ -61,6 +114,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "pnpm",
         language: "node",
         tier: 1,
+        platforms: "all",
         exe_candidates: &["pnpm.cmd", "pnpm.exe", "pnpm"],
         ops: &[
             ("version", &["--version"]),
@@ -83,6 +137,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "yarn",
         language: "node",
         tier: 1,
+        platforms: "all",
         exe_candidates: &["yarn.cmd", "yarn.exe", "yarn"],
         ops: &[
             ("version", &["--version"]),
@@ -103,6 +158,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "pip",
         language: "python",
         tier: 1,
+        platforms: "all",
         exe_candidates: &["pip.exe", "pip3.exe", "pip", "pip3"],
         ops: &[
             ("version", &["--version"]),
@@ -123,6 +179,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "cargo",
         language: "rust",
         tier: 1,
+        platforms: "all",
         exe_candidates: &["cargo.exe", "cargo"],
         ops: &[
             ("version", &["--version"]),
@@ -142,6 +199,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "dotnet / NuGet",
         language: "dotnet",
         tier: 1,
+        platforms: "all",
         exe_candidates: &["dotnet.exe", "dotnet"],
         ops: &[
             ("version", &["--version"]),
@@ -161,6 +219,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "winget",
         language: "windows",
         tier: 1,
+        platforms: "win",
         exe_candidates: &["winget.exe", "winget"],
         ops: &[
             ("version", &["--version"]),
@@ -182,6 +241,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "PowerShellGet",
         language: "powershell",
         tier: 2,
+        platforms: "all",
         exe_candidates: &["pwsh.exe", "powershell.exe", "pwsh", "powershell"],
         ops: &[
             ("version", &["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"]),
@@ -208,6 +268,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "composer",
         language: "php",
         tier: 2,
+        platforms: "all",
         exe_candidates: &["composer.bat", "composer.phar", "composer"],
         ops: &[
             ("version", &["--version", "--no-ansi"]),
@@ -228,6 +289,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "gem",
         language: "ruby",
         tier: 2,
+        platforms: "all",
         exe_candidates: &["gem.cmd", "gem.exe", "gem"],
         ops: &[
             ("version", &["--version"]),
@@ -249,6 +311,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "go mod",
         language: "go",
         tier: 2,
+        platforms: "all",
         exe_candidates: &["go.exe", "go"],
         ops: &[
             ("version", &["version"]),
@@ -269,6 +332,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "maven",
         language: "java",
         tier: 2,
+        platforms: "all",
         exe_candidates: &["mvn.cmd", "mvn.exe", "mvn"],
         ops: &[
             ("version", &["-v"]),
@@ -286,6 +350,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "Chocolatey",
         language: "windows",
         tier: 3,
+        platforms: "win",
         exe_candidates: &["choco.exe", "choco"],
         ops: &[
             ("version", &["--version"]),
@@ -305,6 +370,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "Scoop",
         language: "windows",
         tier: 3,
+        platforms: "win",
         exe_candidates: &["scoop.cmd", "scoop.ps1", "scoop"],
         ops: &[
             ("version", &["--version"]),
@@ -323,6 +389,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "conda",
         language: "python",
         tier: 3,
+        platforms: "all",
         exe_candidates: &["conda.exe", "conda.bat", "conda"],
         ops: &[
             ("version", &["--version"]),
@@ -343,6 +410,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "dart pub",
         language: "dart",
         tier: 3,
+        platforms: "all",
         exe_candidates: &["dart.exe", "dart"],
         ops: &[
             ("version", &["--version"]),
@@ -362,6 +430,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "luarocks",
         language: "lua",
         tier: 3,
+        platforms: "all",
         exe_candidates: &["luarocks.bat", "luarocks.exe", "luarocks"],
         ops: &[
             ("version", &["--version"]),
@@ -381,6 +450,7 @@ pub static MANAGERS: &[ManagerDef] = &[
         name: "cpan",
         language: "perl",
         tier: 3,
+        platforms: "all",
         exe_candidates: &["cpan.bat", "cpanm.bat", "cpan", "cpanm"],
         ops: &[
             ("version", &["--version"]),

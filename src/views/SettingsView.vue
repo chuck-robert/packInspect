@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 设置页：语言 / 主题 / 启动行为 + 运行环境与安全模型说明。
  *
@@ -58,7 +58,7 @@ function setTheme(theme: ThemeName) {
   dirty.value = true
 }
 
-function setToggle(key: 'scanOnStartup', value: boolean) {
+function setToggle(key: 'scanOnStartup' | 'showOtherPlatforms', value: boolean) {
   settings.patch({ [key]: value })
   dirty.value = true
 }
@@ -136,6 +136,21 @@ async function save() {
                 type="checkbox"
                 :checked="settings.settings.scanOnStartup"
                 @change="setToggle('scanOnStartup', ($event.target as HTMLInputElement).checked)"
+              />
+              <span class="switch__track"><span class="switch__thumb" /></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-row__label">
+              <div>{{ t('settings.showOtherPlatforms') }}</div>
+              <div class="hint">{{ t('settings.showOtherPlatformsHint') }}</div>
+            </div>
+            <label class="switch">
+              <input
+                type="checkbox"
+                :checked="settings.settings.showOtherPlatforms"
+                @change="setToggle('showOtherPlatforms', ($event.target as HTMLInputElement).checked)"
               />
               <span class="switch__track"><span class="switch__thumb" /></span>
             </label>

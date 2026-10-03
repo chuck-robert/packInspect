@@ -10,8 +10,16 @@ export interface ManagerInfo {
   id: string
   name: string
   language: string
-  /** 1 = 一期可用，2/3 = 后续阶段（界面弱化展示） */
+  /** 1 = 一期可用，2/3/4 = 后续阶段（界面弱化展示） */
   tier: number
+  /** 适用平台说明，例如「仅 Linux」「macOS / Linux」 */
+  platforms: string
+  /**
+   * 是否适用于**当前**操作系统。
+   * false 表示这东西在本机不可能存在（如 Windows 上的 apt / brew），
+   * 界面要说明原因，而不是提示「未在 PATH 中找到」。
+   */
+  platformApplicable: boolean
   detected: boolean
   version: string | null
   exePath: string | null
@@ -187,6 +195,8 @@ export interface AppSettings {
   language: string
   theme: string
   scanOnStartup: boolean
+  /** 是否列出「当前系统不适用」的包管理器（如 Windows 上的 apt / brew），默认关闭 */
+  showOtherPlatforms: boolean
 }
 
 /** 后端统一错误结构 */
