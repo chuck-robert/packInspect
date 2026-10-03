@@ -60,6 +60,31 @@ pub fn brand_color(manager: &str) -> &'static str {
         "dart" => "#0175c2",
         "luarocks" => "#2b3f8f",
         "cpan" => "#3f5f8f",
+        // ---- 四期：语言生态与运行时 ----
+        "bun" => "#f472b6",
+        "deno" => "#70ffaf",
+        "julia" => "#9558b2",
+        "mix" => "#4b275f",
+        // ---- 四期：构建工具与系统级 ----
+        "gradle" => "#02303a",
+        "brew" => "#fbb040",
+        "vcpkg" => "#4a3aff",
+        "conan" => "#0b8bd4",
+        "swift" => "#f05138",
+        "cocoapods" => "#ee3322",
+        // ---- 五期：Linux 发行版 ----
+        "apt" => "#a80030",
+        "pacman" => "#1793d1",
+        "dnf" => "#3c6eb4",
+        "flatpak" => "#4a90d9",
+        "snap" => "#82bea0",
+        "pipx" => "#3775a9",
+        // ---- 六期：语言工具链 ----
+        "opam" => "#e0812c",
+        "dub" => "#b03931",
+        "nimble" => "#ffe953",
+        "cabal" => "#5e5086",
+        "stack" => "#5d4f85",
         _ => "#4c9aff",
     }
 }
@@ -68,6 +93,232 @@ pub fn brand_color(manager: &str) -> &'static str {
 fn initials(name: &str) -> String {
     let letters: Vec<char> = name.chars().filter(|c| c.is_alphanumeric()).collect();
     letters.iter().take(2).collect::<String>().to_uppercase()
+}
+
+/// 四期之后新增的管理器的矢量标记。
+///
+/// 【为什么不画官方 logo】
+/// 官方 logo 多为复杂路径且有商标限制（见 README 说明）。这里用**简洁几何形 +
+/// 品牌色**表达"这是哪个工具"，可辨认即可 —— 每个形状都刻意做得彼此不同，
+/// 扫一眼能区分，比一堆字母缩写方块强得多。
+///
+/// 返回 `None` 时调用方会退回「品牌色 + 首字母」的通用样式。
+fn generic_mark(manager: &str, color: &str, ink: &str) -> Option<String> {
+    let body = match manager {
+        // bun：粉色底 + 白色小圆点（保留"点"的意象）
+        "bun" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<circle cx="16" cy="19" r="6" fill="{ink}"/>"##,
+                r##"<circle cx="11" cy="10" r="2" fill="{ink}"/>"##,
+                r##"<circle cx="16" cy="8" r="2" fill="{ink}"/>"##,
+                r##"<circle cx="21" cy="10" r="2" fill="{ink}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // deno：深色底 + 绿色同心弧（恐龙轮廓太复杂，用其"光环"意象）
+        "deno" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#1c1c1c"/>"##,
+                r##"<circle cx="16" cy="16" r="9" fill="none" stroke="{color}" stroke-width="2.5"/>"##,
+                r##"<circle cx="16" cy="16" r="3.5" fill="{color}"/>"##
+            ),
+            color = color
+        ),
+        // Julia：紫/绿/红三色圆点（其 logo 就是三个点的组合）。
+        // 颜色写死为品牌三色，因此不需要 format 参数。
+        "julia" => concat!(
+            r##"<rect width="32" height="32" rx="6" fill="#1b1b2b"/>"##,
+            r##"<circle cx="11" cy="12" r="3.4" fill="#9558b2"/>"##,
+            r##"<circle cx="21" cy="12" r="3.4" fill="#389826"/>"##,
+            r##"<circle cx="16" cy="21" r="3.4" fill="#cb3c33"/>"##
+        )
+        .to_string(),
+        // mix：紫色六边形（Elixir 的化学意象）
+        "mix" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M16 6l8.5 5v10L16 26l-8.5-5V11z" fill="none" stroke="{ink}" stroke-width="2"/>"##,
+                r##"<circle cx="16" cy="16" r="2.6" fill="{ink}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // gradle：深青底 + 向上的台阶（构建）
+        "gradle" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M8 23h5V15h5V11h6" fill="none" stroke="{ink}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // brew：琥珀色底 + 啤酒杯
+        "brew" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M9 10h11v13a2 2 0 01-2 2h-7a2 2 0 01-2-2z" fill="{ink}"/>"##,
+                r##"<path d="M20 13h3a3 3 0 010 6h-3" fill="none" stroke="{ink}" stroke-width="2.4"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // vcpkg：紫色底 + 层叠的方块（依赖栈）
+        "vcpkg" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<rect x="9" y="18" width="14" height="6" rx="1.5" fill="{ink}"/>"##,
+                r##"<rect x="9" y="11" width="14" height="6" rx="1.5" fill="{ink}" opacity="0.75"/>"##,
+                r##"<rect x="9" y="4" width="14" height="6" rx="1.5" fill="{ink}" opacity="0.5"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // conan：蓝色底 + 由中心发散的节点（包依赖图）
+        "conan" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<circle cx="16" cy="16" r="3.2" fill="{ink}"/>"##,
+                r##"<circle cx="8" cy="9" r="2" fill="{ink}"/>"##,
+                r##"<circle cx="24" cy="9" r="2" fill="{ink}"/>"##,
+                r##"<circle cx="8" cy="24" r="2" fill="{ink}"/>"##,
+                r##"<circle cx="24" cy="24" r="2" fill="{ink}"/>"##,
+                r##"<path d="M14 14l-4.5-3.5M18 14l4.5-3.5M14 18l-4.5 3.5M18 18l4.5 3.5" stroke="{ink}" stroke-width="1.6"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // swift：橙红底 + 飞鸟剪影（折线意象）
+        "swift" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M6 20c6 1 12-3 15-8-5 2-9 1-11-1 3 0 6-1 8-3-3 .5-7 .5-10-1 4-1 8-4 9-6" fill="none" stroke="{ink}" stroke-width="2.2" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // cocoapods：红色底 + 菱形（Pod 意象）
+        "cocoapods" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M16 5l9 11-9 11-9-11z" fill="{ink}"/>"##,
+                r##"<path d="M16 11l4 5-4 5-4-5z" fill="{color}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // apt：暗红底 + 三条横线（软件包堆叠）
+        "apt" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<rect x="8" y="9" width="16" height="4" rx="2" fill="{ink}"/>"##,
+                r##"<rect x="8" y="15" width="16" height="4" rx="2" fill="{ink}" opacity="0.7"/>"##,
+                r##"<rect x="8" y="21" width="16" height="4" rx="2" fill="{ink}" opacity="0.45"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // pacman：蓝色底 + 吃豆人缺口圆
+        "pacman" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M16 6a10 10 0 100 20 10 10 0 00-7.1-2.9L16 16l-7.1-7.1A10 10 0 0016 6z" fill="{ink}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // dnf：蓝色底 + 向下的箭头（下载/安装）
+        "dnf" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M16 6v13" stroke="{ink}" stroke-width="3" stroke-linecap="round"/>"##,
+                r##"<path d="M9 15l7 7 7-7" fill="none" stroke="{ink}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>"##,
+                r##"<rect x="8" y="25" width="16" height="3" rx="1.5" fill="{ink}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // flatpak：蓝色底 + 立方体（沙盒容器）
+        "flatpak" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M16 5l9 5v12l-9 5-9-5V10z" fill="none" stroke="{ink}" stroke-width="2.2" stroke-linejoin="round"/>"##,
+                r##"<path d="M7 10l9 5 9-5M16 15v12" stroke="{ink}" stroke-width="1.6" opacity="0.8"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // snap：淡绿底 + 右上角的斜角方块（其 logo 的方格意象）
+        "snap" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="#252525"/>"##,
+                r##"<path d="M16 5l10 5.5v11L16 27 6 21.5v-11z" fill="{color}"/>"##,
+                r##"<path d="M16 5l10 5.5-10 5.5-10-5.5z" fill="#ffffff" opacity="0.35"/>"##
+            ),
+            color = color
+        ),
+        // pipx：蓝底 + 方框内的小方块（隔离环境）
+        "pipx" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<rect x="7" y="7" width="18" height="18" rx="3" fill="none" stroke="{ink}" stroke-width="2.2"/>"##,
+                r##"<rect x="13" y="13" width="6" height="6" rx="1.5" fill="{ink}"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // opam：橙色底 + 骆驼（OCaml 吉祥物太复杂，用"包裹"意象）
+        "opam" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M6 12l10-5 10 5v10l-10 5-10-5z" fill="none" stroke="{ink}" stroke-width="2.2" stroke-linejoin="round"/>"##,
+                r##"<path d="M6 12l10 5 10-5M16 17v10" stroke="{ink}" stroke-width="1.8"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // dub：红底 + 齿轮（D 语言构建工具）
+        "dub" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<circle cx="16" cy="16" r="5" fill="none" stroke="{ink}" stroke-width="2.4"/>"##,
+                r##"<path d="M16 5v4M16 23v4M5 16h4M23 16h4M8.2 8.2l2.8 2.8M21 21l2.8 2.8M23.8 8.2L21 11M11 21l-2.8 2.8" stroke="{ink}" stroke-width="2.4" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // nimble：黄底 + 皇冠（Nim 的皇冠意象，用深色描边保证可见）
+        "nimble" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M7 22l-1-11 6 5 4-8 4 8 6-5-1 11z" fill="#1f2328"/>"##
+            ),
+            color = color
+        ),
+        // cabal：紫底 + 函数式符号 λ
+        "cabal" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<path d="M20 8h-3l-6 16H8M13 14h9" fill="none" stroke="{ink}" stroke-width="2.6" stroke-linecap="round"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        // stack：紫底 + 三层堆叠（名字即"栈"）
+        "stack" => format!(
+            concat!(
+                r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                r##"<rect x="8" y="20" width="16" height="5" rx="1.5" fill="{ink}"/>"##,
+                r##"<rect x="11" y="13" width="10" height="5" rx="1.5" fill="{ink}" opacity="0.75"/>"##,
+                r##"<rect x="14" y="6" width="4" height="5" rx="1.5" fill="{ink}" opacity="0.55"/>"##
+            ),
+            color = color,
+            ink = ink
+        ),
+        _ => return None,
+    };
+    Some(body)
 }
 
 /// 生成某个包管理器的 logo（内联 SVG data URI）
@@ -257,14 +508,19 @@ pub fn manager_logo_svg(manager: &str, name: &str, theme: Theme) -> String {
         // ---- 通用回退：品牌色方块 + 名称缩写 ----
         _ => {
             let label = initials(name);
-            format!(
-                concat!(
-                    r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
-                    r##"<text x="16" y="16" fill="#ffffff" font-family="Segoe UI,sans-serif" font-size="13" font-weight="700" text-anchor="middle" dominant-baseline="central">{label}</text>"##
-                ),
-                color = color,
-                label = label
-            )
+            if let Some(shape) = generic_mark(manager, &color, ink) {
+                shape
+            } else {
+                format!(
+                    concat!(
+                        r##"<rect width="32" height="32" rx="6" fill="{color}"/>"##,
+                        r##"<text x="16" y="16" fill="{ink}" font-family="Segoe UI,sans-serif" font-size="13" font-weight="700" text-anchor="middle" dominant-baseline="central">{label}</text>"##
+                    ),
+                    color = color,
+                    ink = ink,
+                    label = label
+                )
+            }
         }
     };
 
@@ -391,6 +647,36 @@ mod tests {
         let dark = manager_logo_svg("dotnet", "dotnet", Theme::Dark);
         let light = manager_logo_svg("dotnet", "dotnet", Theme::Light);
         assert_ne!(dark, light, "深浅主题应产生不同配色");
+    }
+
+    /// 四期之后新增的管理器必须有**各自不同**的矢量标记。
+    ///
+    /// 这条测试的作用：防止有人新增管理器后忘了加标记，让它们全都退化成
+    /// 通用首字母方块 —— 侧边栏一列方块会完全失去辨识度。
+    #[test]
+    fn new_managers_have_distinct_marks() {
+        let new_ids = [
+            "bun", "deno", "julia", "mix", "gradle", "brew", "vcpkg", "conan", "swift",
+            "cocoapods", "apt", "pacman", "dnf", "flatpak", "snap", "pipx", "opam", "dub",
+            "nimble", "cabal", "stack",
+        ];
+        let mut seen: Vec<(String, String)> = Vec::new();
+        for id in new_ids {
+            let mark = generic_mark(id, "#4c9aff", "#ffffff");
+            assert!(mark.is_some(), "{id} 缺少专用矢量标记，会退化成首字母方块");
+            let body = mark.unwrap();
+            assert!(body.len() > 60, "{id} 的标记内容过短");
+            // 每个标记都应引用传入的色值或自定义色，但形状必须彼此不同
+            for (other_id, other_body) in &seen {
+                assert_ne!(
+                    &body, other_body,
+                    "{id} 与 {other_id} 的标记完全相同，失去辨识度"
+                );
+            }
+            seen.push((id.to_string(), body));
+        }
+        // 未知 id 必须返回 None，以便调用方退回通用样式
+        assert!(generic_mark("nonexistent-manager", "#fff", "#000").is_none());
     }
 
     #[test]

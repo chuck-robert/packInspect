@@ -1,4 +1,4 @@
-﻿# PackInspect
+# PackInspect
 
 本机包环境扫描工具。检测多种包管理器、列出已安装包、统计缓存占用、读写镜像源配置、
 导出报告，并提供**安全的缓存清理**。技术栈：**Vue 3 + TypeScript + Vite** 前端，
@@ -368,7 +368,25 @@ $env:RUSTUP_UPDATE_ROOT = 'https://rsproxy.cn/rustup'
 
 ## 6. 支持的包管理器
 
-### 一期（已接入扫描，真实可用）
+共 **39 个**，按平台与生态族分组。每个都带 `platforms` 标记，**不属于当前系统的
+不会出现在侧边栏**（可在设置里打开「显示其它平台的包管理器」查看）。
+
+### 平台适用性
+
+| 平台标记 | 含义 | 例子 |
+|---|---|---|
+| `all` | 全平台 | npm、pip、cargo、bun、opam、vcpkg |
+| `win` | 仅 Windows | winget、chocolatey、scoop |
+| `linux` | 仅 Linux | apt、pacman、dnf、flatpak、snap |
+| `macos` | 仅 macOS | CocoaPods（需要 Xcode） |
+| `unix` | macOS / Linux | Homebrew（Windows 上只能在 WSL 里用） |
+
+**本机（Windows）实测**：39 个中 32 个适用、7 个不适用，检测到 7 个
+（npm / pip / cargo / dotnet / winget / powershellget / maven）。
+平台不适用的管理器会显示「本系统不适用」并说明它实际支持哪些平台，
+而不是谎报「未在 PATH 中找到」—— 后者会让你以为是自己环境有问题。
+
+### 一期（已实测扫描）
 
 | id | 语言 | 全局包识别方式 | 缓存目录 | 镜像源 |
 |---|---|---|---|---|
@@ -380,22 +398,80 @@ $env:RUSTUP_UPDATE_ROOT = 'https://rsproxy.cn/rustup'
 | `dotnet` | .NET | 扫 `~/.nuget/packages/<Id>/<Version>` | `%LOCALAPPDATA%\NuGet\v3-cache` | — |
 | `winget` | Windows | `winget list`（按表头列位切分定宽表格） | `%LOCALAPPDATA%\Microsoft\WinGet` | — |
 
-### 二期（探测已接入，扫描逻辑开发中）
+### 二 / 三期（扫描已接入，未在真机逐一验证）
 
-`powershellget`（`Get-Module -ListAvailable`）、`composer`、`gem`、`go`（GOMODCACHE）、
-`maven`（`.m2/repository`）
+`powershellget`（`Get-Module -ListAvailable`）、`composer`、`gem`、`go`、`maven`、
+`chocolatey`、`scoop`、`conda`、`dart`(pub)、`luarocks`、`cpan`
 
-### 三期（探测已接入，扫描逻辑规划中）
+### 四期：语言生态与构建工具
 
-`chocolatey`、`scoop`、`conda`、`dart`（pub）、`luarocks`、`cpan`
+| id | 语言 | 能否列出已安装 | 说明 |
+|---|---|---|---|
+| `bun` | Node.js | ✅ `pm ls -g` | 该命令官方文档**没写**，来自上游源码；失败时退回读全局 package.json |
+| `deno` | TypeScript | ⚠️ **枚举目录** | deno **没有**列出全局包的命令，只能枚举其 bin 目录 |
+| `julia` | Julia | ✅ `Pkg.status()` | 列的是**当前活动环境**，不是跨环境全局集合 |
+| `mix` | Elixir | ❌ 无 | Elixir 依赖是项目级的，没有全局已安装列表 |
+| `gradle` | Java | ❌ 无 | 且每次调用都执行项目构建脚本（任意代码执行），因此**未开放任何操作** |
+| `vcpkg` | C++ | ✅ `list` | classic 模式下该已安装树被**所有使用它的项目共享** |
+| `conan` | C++ | ✅ `list` | 卸载走 `remove {}`；包名经严格校验以防 `*` 清空整个缓存 |
+| `swift` | Swift | ❌ 无 | SwiftPM 依赖是项目级的 |
+| `cocoapods` | Ruby | ❌ 无 | 仅 macOS；`pod list` 列的是**可用** pod 目录而非已安装 |
 
-> 二期 / 三期管理器的扫描函数已写好并接入 `report.rs` 的分发，但**尚未在真实环境
-> 逐一验证**（本机没有安装这些管理器）。在管理页上它们会标为「后续支持」，
-> 已检测到的仍可点「管理此管理器」尝试扫描。
+### 五期：Linux 发行版（仅 Linux）
 
-新增一个管理器：在 `whitelist.rs` 的 `MANAGERS` 加一条定义 → 在 `packages.rs`
-补该生态的枚举函数 → 在 `report.rs` 的 `collect_packages` 加一个分支。
-前端无需改动（侧边栏与表格完全数据驱动）。
+`apt`（用 `apt-get`）、`pacman`、`dnf`（`yum` 是其兼容层，合并为一个条目）、
+`flatpak`、`snap`、`pipx`（唯一跨平台的一个）
+
+### 六期：语言工具链
+
+| id | 语言 | 说明 |
+|---|---|---|
+| `opam` | OCaml | 列出的是**当前 switch** 的包；opam 没有跨 switch 列表 |
+| `dub` | D | **没有 install 命令**；`dub remove` 只删缓存，且无法用 CLI 移除项目依赖 |
+| `nimble` | Nim | 不带 `--ver` 时只有包名没有版本 |
+| `cabal` | Haskell | **没有 uninstall 命令**；`list --installed` 读的是 GHC 包库而非 store |
+| `stack` | Haskell | **没有全局列表**；`stack uninstall` 是只打印建议的空操作 |
+
+### 能力边界是刻意保留的
+
+多个生态**确实没有**某些能力，工具不会编命令来凑齐按钮：
+
+- **deno**：没有列出全局包的命令（`deno info` 只打印缓存路径，`deno list`
+  只列项目依赖）。因此改为枚举其全局 bin 目录（`$DENO_INSTALL_ROOT` 或 `~/.deno/bin`），
+  并明确说明这是按已安装的可执行文件统计的。
+- **dotnet**：全局包目录没有官方卸载子命令，因此「卸载」不可用。
+- **gradle**：每次调用都执行项目构建脚本，静态参数白名单约束不了，因此只开放版本探测。
+- **mix / swift / cocoapods**：依赖是项目级的，没有全局列表，对应操作不可用。
+
+### 安全上有意排除的参数
+
+核实过程中确认了一批**危险参数**，它们不会出现在白名单里：
+
+| 生态 | 排除的参数 | 原因 |
+|---|---|---|
+| apt | `autoremove` | 会移除"不再被需要"的自动依赖；apt 自己的 man 页都提醒先检查列表 |
+| apt | `dist-upgrade` | 可能移除已安装的包 |
+| pacman | `-Sy`（单独用） | 部分升级，官方明令禁止 |
+| pacman | `-Rdd` / `-Rc` | 跳过依赖检查 / 级联移除依赖它的包 |
+| dnf | `autoremove`、不带 `--noautoremove` 的 remove | 会连带移除因此变得不再需要的依赖 |
+| flatpak | `--unused` / `--all` / `--delete-data` | 移除未被需要的运行时 / 不可逆的数据删除 |
+| snap | `--purge` | 跳过快照，移除不可恢复 |
+| brew | `--zap` / `--force` / `--ignore-dependencies` | 删共享文件 / 该包全部版本 / 别的包正依赖的东西 |
+| vcpkg | `--recurse` | 允许移除命令行未点名的包 |
+| conan | 包名含 `*` | `conan remove "*"` 会清空整个本地缓存 —— 由严格包名校验挡住 |
+| cabal / gradle / stack | store / 构建脚本 / `stack upgrade` | 内容寻址共享 store / 任意代码 / 替换二进制本身 |
+
+**包名校验**是这些防线的主要手段：`*` `?` `[` 等通配与正则元字符被字符集排除，
+因此 `apt-get` 的正则回退与 `dnf` 的 glob 展开都无法被触发；系统级生态另有一套
+更严格的字符集。前导 `-` 也被拒绝，防止选项注入（如 `pip uninstall -y --target=...`）。
+
+> 逐个管理器的**核实记录与证据强度**（实测 / 文档 / 源码 / 存疑）见
+> [docs/manager-verification.md](docs/manager-verification.md)。
+> 重要提醒：除 npm 外，这些命令**没有在本机实际执行过**，依据是官方文档与上游源码。
+
+新增一个管理器：在 `whitelist.rs` 的 `MANAGERS` 加一条定义（含 `platforms`）→
+在 `packages.rs` 补该生态的枚举函数 → 在 `report.rs` 的 `collect_packages` 加一个分支 →
+在 `icons.rs` 加品牌色与矢量标记。前端无需改动（侧边栏与表格完全数据驱动）。
 
 ---
 

@@ -896,6 +896,241 @@ pub fn cpan_packages(timeout_ms: u64) -> Vec<PackageRecord> {
 }
 
 // ---------------------------------------------------------------------------
+// 四期：语言生态
+// ---------------------------------------------------------------------------
+
+/// deno 的全局已安装包。
+///
+/// 【为什么是枚举目录而不是跑命令】
+/// deno **没有**列出全局已安装包的命令 —— 已核实：
+/// `deno info` 只打印缓存路径，`deno list` 是 2026-06 才加的、且只列**项目**依赖。
+/// `deno install -g` 实际上只是往 bin 目录写一个启动脚本（shim），
+/// 因此"装了哪些"只能靠枚举该目录得知。这是唯一可靠途径。
+///
+/// Windows 上每个包会生成三样东西：`<name>.cmd`、一个无扩展名的同名文件、
+/// 以及隐藏的 `<name>.cmd.deno.json`。因此需要去重并跳过隐藏文件。
+/// `--compile` 产出的则是真正的 `.exe`。
+pub fn deno_global_bin(measure: bool) -> Vec<PackageRecord> {
+    // bin 目录：优先 DENO_INSTALL_ROOT，否则 ~/.deno
+    let root = std::env::var_os("DENO_INSTALL_ROOT")
+        .map(std::path::PathBuf::from)
+        .or_else(|| crate::validate::home_dir().map(|h| h.join(".deno")));
+    let Some(root) = root else { return Vec::new() };
+    let bin = root.join("bin");
+
+    let Ok(entries) = std::fs::read_dir(&bin) else {
+        return Vec::new();
+    };
+
+    // 用「基名 → 是否为 .exe」去重：同名会同时出现 `<name>.cmd` 与 `<name>`
+    let mut seen: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // 跳过隐藏文件（.deno.json / .lock 等）与目录
+        if file_name.starts_with('.') || path.is_dir() {
+            continue;
+        }
+        let lower = file_name.to_ascii_lowercase();
+        // deno 自身不是 deno 装出来的包，跳过
+        if lower == "deno" || lower == "deno.exe" || lower == "deno.cmd" {
+            continue;
+        }
+
+        // 去掉 .cmd / .exe / .bat 后缀得到包名；无扩展名的与带扩展名的视为同一个包
+        let name = if let Some(stem) = file_name.strip_suffix(".cmd") {
+            stem.to_string()
+        } else if let Some(stem) = file_name.strip_suffix(".bat") {
+            stem.to_string()
+        } else if let Some(stem) = file_name.strip_suffix(".exe") {
+            stem.to_string()
+        } else {
+            file_name.to_string()
+        };
+        if name.is_empty() {
+            continue;
+        }
+
+        let entry_slot = seen.entry(name).or_insert(None);
+        // 同名会同时出现 `<name>.cmd` 与无扩展名的 `<name>`：先到先得即可，
+        // 两者指向同一个包；真 `.exe`（`--compile` 产物）也只是路径形式不同，
+        // 不需要区别对待。
+        if entry_slot.is_none() {
+            *entry_slot = Some(path.to_string_lossy().to_string());
+        }
+    }
+
+    seen.into_iter()
+        .map(|(name, path)| {
+            let mut record = rec(name, None, "deno", "global", path);
+            if measure {
+                // shim 文件本身很小，统计意义不大，但保持一致行为
+                if let Some(p) = &record.path {
+                    record.size = Some(crate::fsutil::dir_size(std::path::Path::new(p)));
+                }
+            }
+            record
+        })
+        .collect()
+}
+
+/// bun 的全局已安装包。
+///
+/// `bun pm ls -g` 在官方文档里没有写，是从上游源码读出来的，因此允许失败：
+/// 失败时退回解析全局目录下的 `package.json`（该路径有文档）。
+pub fn bun_packages(timeout_ms: u64, measure: bool) -> Vec<PackageRecord> {
+    if let Some(text) = try_cmd("bun", "listGlobal", timeout_ms) {
+        let records = parse_bun_list(&text, measure);
+        if !records.is_empty() {
+            return records;
+        }
+    }
+    // 退路：读全局 package.json 的 dependencies
+    bun_global_manifest()
+}
+
+/// `bun pm ls -g` 的输出：首行是
+/// `/path/to/global node_modules (N installed)`，随后是 `├── name@version` 树。
+/// `--all` 会带上间接依赖。
+fn parse_bun_list(text: &str, measure: bool) -> Vec<PackageRecord> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        // 树形前缀有多种：├──  └──  │   ──
+        let trimmed = line
+            .trim_start_matches(|c: char| {
+                matches!(c, '├' | '└' | '│' | '─' | ' ' | '\\' | '|' | '+' | '`' | '-')
+            })
+            .trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // 首个非树形行是 "… node_modules (N installed)"，用 @ 判断更稳
+        let Some(at) = trimmed.rfind('@') else { continue };
+        // 作用域包 `@scope/name@1.0.0` 的第一个字符就是 @，要保证 at 不是它
+        if at == 0 {
+            continue;
+        }
+        let name = trimmed[..at].trim().to_string();
+        let version = trimmed[at + 1..].trim().to_string();
+        if name.is_empty() || version.is_empty() {
+            continue;
+        }
+        // 版本里不该有空格或括号，否则说明不是包行
+        if version.contains(' ') || version.contains('(') {
+            continue;
+        }
+        let path = bun_global_package_dir().map(|d| d.join(&name).to_string_lossy().to_string());
+        let mut record = rec(name, Some(version), "bun", "global", path);
+        if measure {
+            record.size = record
+                .path
+                .as_deref()
+                .map(|p| crate::fsutil::dir_size(std::path::Path::new(p)));
+        }
+        out.push(record);
+    }
+    out
+}
+
+/// 全局包目录：`~/.bun/install/global`（可用 BUN_INSTALL 覆盖）
+fn bun_global_package_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("BUN_INSTALL")
+        .map(std::path::PathBuf::from)
+        .or_else(|| crate::validate::home_dir().map(|h| h.join(".bun")))?;
+    Some(base.join("install").join("global"))
+}
+
+/// 退路：直接读全局 `package.json` 的 dependencies
+fn bun_global_manifest() -> Vec<PackageRecord> {
+    let Some(dir) = bun_global_package_dir() else { return Vec::new() };
+    let file = dir.join("package.json");
+    let Ok(Some(value)) = crate::fsutil::read_json(&file, 4 * 1024 * 1024) else {
+        return Vec::new();
+    };
+    let Some(deps) = value.get("dependencies").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    deps.iter()
+        .map(|(name, ver)| {
+            let version = ver.as_str().map(|v| v.trim_start_matches(['^', '~']).to_string());
+            rec(
+                name.clone(),
+                version,
+                "bun",
+                "global",
+                Some(dir.join(name).to_string_lossy().to_string()),
+            )
+        })
+        .collect()
+}
+
+/// Julia 的已安装包。
+///
+/// 列的是**当前活动环境**里显式添加的包（PKGMODE_PROJECT），不是跨环境的全局集合 ——
+/// 界面需要说明这一点。
+///
+/// 解析要点（已核实）：输出形如
+/// ```text
+/// Status `~/.julia/environments/v1.10/Project.toml`
+///   [7876af07] Example v0.5.3
+/// ```
+/// 必须按 `[uuid] Name vX.Y.Z` 的 token 模式解析，**不能按列位置** ——
+/// 列宽会随内容变化，且可能带 `⌃`（可升级）/`⌅`（被 compat 限制）/`[yanked]` 标记。
+pub fn julia_packages(timeout_ms: u64, measure: bool) -> Vec<PackageRecord> {
+    let Some(text) = try_cmd("julia", "listGlobal", timeout_ms) else {
+        return Vec::new();
+    };
+    parse_julia_status(&text, measure)
+}
+
+fn parse_julia_status(text: &str, measure: bool) -> Vec<PackageRecord> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // 空环境提示
+        if trimmed.starts_with('(') {
+            continue;
+        }
+        // 期望：[uuid] Name v1.2.3  （uuid 是 8 位十六进制）
+        let Some(rest) = trimmed.strip_prefix('[') else { continue };
+        let Some(close) = rest.find(']') else { continue };
+        let uuid = &rest[..close];
+        if uuid.len() != 8 || !uuid.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let after = rest[close + 1..].trim();
+        // 去掉可能的状态标记
+        let after = after.trim_end_matches(['⌃', '⌅']).trim();
+        let mut parts = after.split_whitespace();
+        let Some(name) = parts.next() else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        // 版本形如 v1.2.3；末尾可能带 [yanked]
+        let version = parts
+            .next()
+            .map(|v| v.trim_start_matches('v').to_string())
+            .filter(|v| !v.is_empty() && v.chars().next().is_some_and(|c| c.is_ascii_digit()));
+
+        let path = crate::validate::home_dir()
+            .map(|h| h.join(".julia").join("packages").join(name).to_string_lossy().to_string());
+        let mut record = rec(name.to_string(), version, "julia", "global", path);
+        if measure {
+            record.size = record
+                .path
+                .as_deref()
+                .map(|p| crate::fsutil::dir_size(std::path::Path::new(p)));
+        }
+        out.push(record);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // 冗余 / 旧版本识别与版本比较
 // ---------------------------------------------------------------------------
 

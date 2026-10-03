@@ -13,6 +13,16 @@ fn is_name_char(c: char) -> bool {
 }
 
 /// 校验用户输入的包名。空串、含空白、含引号、含 shell 元字符一律拒绝。
+///
+/// 【为什么必须拒绝前导 `-`】
+/// 包名会被替换进白名单模板（如 `pip uninstall -y {}`）。若包名以 `-` 开头，
+/// 它就会被目标程序当成**选项**而非参数 —— 例如
+/// `pip uninstall -y --target=/etc/passwd x` 会把安装位置指到系统目录。
+/// 模板里的参数位置是固定的，因此这里从入口堵死选项注入。
+///
+/// 注意：`*` `?` `[` 这些通配/正则元字符**已经**被字符集排除在外，
+/// 这一点很关键 —— apt-get 会把不匹配的参数当 POSIX 正则匹配全部包名，
+/// dnf/pacman 也会做 glob 展开。字符集是这道防线的主要手段。
 pub fn package_name(name: &str) -> AppResult<&str> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -22,11 +32,44 @@ pub fn package_name(name: &str) -> AppResult<&str> {
         // npm 包名长度上限
         return Err(AppError::invalid("包名过长"));
     }
+    if trimmed.starts_with('-') {
+        return Err(AppError::forbidden(format!(
+            "包名不能以 - 开头（会被当成命令行选项）: {trimmed}"
+        )));
+    }
     if trimmed.starts_with('.') || trimmed.starts_with('/') || trimmed.contains("..") {
         return Err(AppError::forbidden(format!("包名包含非法路径片段: {trimmed}")));
     }
     if !trimmed.chars().all(is_name_char) {
         return Err(AppError::forbidden(format!("包名包含非法字符: {trimmed}")));
+    }
+    Ok(trimmed)
+}
+
+/// 系统级包管理器（apt / dnf / pacman / …）的**更严格**包名校验。
+///
+/// 【为什么这些生态需要单独一套】
+/// 它们把包名当作**规格表达式**处理，而不只是字符串：
+/// - `apt-get`：不匹配的参数只要含 `.` `?` `*` 就被当成 POSIX 正则，按**子串**匹配所有包名，
+///   官方 man 页举的例子是 `lo.*` 会命中 `how-lo` 与 `lowest`。合法包名里本来就有 `.`，
+///   所以这个回退路径是真实可达的。
+/// - `dnf remove`：包规格支持 `*` `?` `[]`，且 dnf 会**自己展开**（连引号也挡不住）。
+/// - `pacman`：包名可带 `group/` 前缀等特殊语法。
+///
+/// 这些生态的合法包名只会用到 `[a-z0-9][a-z0-9+._-]*`，不需要 `@` 与 `/`，
+/// 因此这里收紧到该字符集 —— 从根上消灭正则/glob 被触发的可能。
+pub fn system_package_name(name: &str) -> AppResult<&str> {
+    let trimmed = package_name(name)?;
+    let ok = trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '_' | '-'));
+    if !ok {
+        return Err(AppError::forbidden(format!(
+            "系统包管理器不接受该字符（可能被当作正则或通配符）: {trimmed}"
+        )));
+    }
+    if trimmed.starts_with('.') {
+        return Err(AppError::forbidden(format!("包名不能以 . 开头: {trimmed}")));
     }
     Ok(trimmed)
 }
@@ -300,9 +343,81 @@ pub fn resolve_package_op(
     op: PackageOp,
 ) -> AppResult<&'static [&'static str]> {
     validate_manager(manager)?;
-    package_name(package)?;
+
+    // 包名走哪一套校验由**生态**决定：系统级包管理器把包名当规格表达式处理，
+    // 必须用更严格的字符集（见 `system_package_name` 的注释）。
+    if crate::whitelist::uses_spec_syntax(manager) {
+        system_package_name(package)?;
+    } else {
+        package_name(package)?;
+    }
+
     crate::whitelist::op_args(manager, op.as_str())
         .ok_or_else(|| AppError::forbidden(format!("{manager} 不支持 {} 操作", op.as_str())))
+}
+
+/// 系统级包管理器的包名更严格：拒绝一切可能被当作**正则或通配符**的字符。
+///
+/// 为什么这批需要单独一套：apt-get 会把不匹配的参数当 POSIX 正则按子串匹配全部包名
+/// （man 页的例子 `lo.*` 命中 `how-lo` 与 `lowest`），dnf 会对包规格做 glob 展开。
+/// 这些生态的合法包名只用到 `[a-z0-9+._-]`，收紧到该字符集即可从根上消灭该风险。
+#[cfg(test)]
+mod system_name_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_real_system_package_names() {
+        for good in [
+            "bash",
+            "libc6-dev",
+            "g++",
+            "python3.12",
+            "gcc-13-base",
+            "gtk+3.0",
+            "libstdc++6",
+        ] {
+            assert!(system_package_name(good).is_ok(), "{good} 应被接受");
+        }
+    }
+
+    #[test]
+    fn rejects_regex_and_glob_metacharacters() {
+        // 这些是 apt-get 正则回退与 dnf glob 展开的触发字符
+        for bad in ["*", "?", "[abc]", "lo.*", "a*", "bash?", "^bash", "bash$", "a|b"] {
+            assert!(
+                system_package_name(bad).is_err(),
+                "{bad:?} 含正则/通配元字符，必须拒绝（否则 apt-get 会按正则匹配全部包）"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_option_injection_for_every_ecosystem() {
+        // 前导 - 会被目标程序当成选项：pip uninstall -y --target=/etc x 之类
+        for bad in [
+            "--target=/etc/passwd",
+            "-y",
+            "--prefix",
+            "--allow-downgrades",
+            "--force-yes",
+            "--allowerasing",
+        ] {
+            assert!(
+                package_name(bad).is_err(),
+                "{bad:?} 以 - 开头，会被当成选项，必须拒绝"
+            );
+            assert!(system_package_name(bad).is_err(), "{bad:?} 同样应被系统校验拒绝");
+        }
+    }
+
+    #[test]
+    fn ecosystem_scoped_packages_still_work() {
+        // npm 作用域包是合法输入，不能因为收紧系统包名而误伤
+        assert!(package_name("@anthropic-ai/claude-code").is_ok());
+        // 但它们**不该**通过系统级校验（系统生态用不到 @ 与 /）
+        assert!(system_package_name("@scope/pkg").is_err());
+        assert!(system_package_name("a/b").is_err());
+    }
 }
 
 #[cfg(test)]

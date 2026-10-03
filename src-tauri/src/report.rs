@@ -46,12 +46,26 @@ pub fn scan_manager(id: &str, timeout_ms: u64, measure: bool) -> ManagerScanResu
     records.sort_by(|a, b| a.name.cmp(&b.name));
 
     let cache = manager::cache_stats(id, timeout_ms).ok();
-    let detected = crate::whitelist::find(id)
-        .map(|def| executor::resolve_executable(def.exe_candidates).is_some())
+    let def = crate::whitelist::find(id);
+    let detected = def
+        .map(|d| executor::resolve_executable(d.exe_candidates).is_some())
         .unwrap_or(false);
+
+    /*
+     * 区分「已安装但读不到包」与「这个生态根本没有全局包列表」。
+     *
+     * 后者是真实存在的情况：deno 只有项目级依赖、Elixir 的 deps 也是项目级，
+     * 都没有「全局已安装列表」这种东西。若统一报「没有读取到任何包」，
+     * 用户会以为工具坏了或自己环境有问题，而不是"这个生态不提供这个信息"。
+     */
+    let has_list_op = crate::whitelist::op_args(id, "listGlobal").is_some();
 
     let reason = if !detected {
         Some(format!("未在本机检测到 {id} 的可执行文件"))
+    } else if !has_list_op {
+        Some(format!(
+            "{id} 没有「全局已安装包列表」这一概念（其依赖是项目级的），因此无法列出包"
+        ))
     } else if records.is_empty() {
         Some(format!("{id} 已安装，但没有读取到任何包"))
     } else {
@@ -60,7 +74,8 @@ pub fn scan_manager(id: &str, timeout_ms: u64, measure: bool) -> ManagerScanResu
 
     ManagerScanResult {
         manager_id: id.to_string(),
-        ok: detected,
+        // 没有列表能力时不算「扫描成功」，否则界面会把"不支持"显示成"0 个包"
+        ok: detected && has_list_op,
         reason,
         packages: records,
         cache,
@@ -98,6 +113,10 @@ fn collect_packages(id: &str, req: &ScanRequest) -> Vec<PackageRecord> {
         "dart" => packages::dart_packages(timeout),
         "luarocks" => packages::luarocks_packages(timeout),
         "cpan" => packages::cpan_packages(timeout),
+        // deno 没有列出全局包的命令，只能枚举它的全局 bin 目录（见该函数注释）
+        "deno" => packages::deno_global_bin(measure),
+        "bun" => packages::bun_packages(timeout, measure),
+        "julia" => packages::julia_packages(timeout, measure),
         _ => Vec::new(),
     }
 }

@@ -1,4 +1,4 @@
-﻿//! 真实包管理操作的执行层。
+//! 真实包管理操作的执行层。
 //!
 //! 【本项目唯一会改动用户环境的模块】
 //!
@@ -267,14 +267,38 @@ mod tests {
         }
     }
 
+    /// 遍历白名单，保证每个**针对具体包**的操作模板都恰好有一个 `{}` 占位符。
+    ///
+    /// 为什么只查 update/uninstall/install：这三个是「对某个包做点什么」，
+    /// 缺占位符就意味着它会作用于**全部**包（例如 `Pkg.update()` 而不带包名），
+    /// 与右键菜单「更新此包」的语义严重不符，必须拦住。
+    ///
+    /// `updateIndex`（刷新索引）与 `outdated`（查询可升级）**刻意不在此列** ——
+    /// 它们操作的是元数据，本来就不接受包名。`listGlobal` 同理。
+    ///
+    /// 反过来，若某个模板里出现了 `{}` 却不属于上述三类，也说明写错了位置。
     #[test]
-    fn every_op_template_has_exactly_one_placeholder() {
-        // 遍历白名单，确保每个 update/uninstall/install 模板都恰好一个 {}
+    fn every_package_op_template_has_exactly_one_placeholder() {
         for def in whitelist::MANAGERS {
             for op in ["update", "uninstall", "install"] {
                 if let Some(template) = whitelist::op_args(def.id, op) {
                     let count = template.iter().filter(|a| a.contains("{}")).count();
-                    assert_eq!(count, 1, "{} 的 {} 模板占位符数量应为 1", def.id, op);
+                    assert_eq!(
+                        count, 1,
+                        "{} 的 {} 模板必须恰好一个占位符（0 个会作用于全部包，多个会错位）",
+                        def.id, op
+                    );
+                }
+            }
+            // 元数据类操作不该出现占位符
+            for op in ["updateIndex", "outdated", "listGlobal", "version"] {
+                if let Some(template) = whitelist::op_args(def.id, op) {
+                    let count = template.iter().filter(|a| a.contains("{}")).count();
+                    assert_eq!(
+                        count, 0,
+                        "{} 的 {} 是元数据/查询类操作，不该有占位符",
+                        def.id, op
+                    );
                 }
             }
         }
