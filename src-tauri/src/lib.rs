@@ -1,4 +1,4 @@
-﻿//! PackInspect 库入口。
+//! PackInspect 库入口。
 //!
 //! 分层（依赖方向自上而下，下层不反向依赖上层）：
 //! ```text
@@ -70,8 +70,49 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
         ])
+        .setup(|app| {
+            apply_window_icon(app);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("启动 PackInspect 失败");
+}
+
+/// 显式给主窗口设置图标。
+///
+/// 【为什么需要这一步】
+/// exe 内嵌的图标资源只有一部分场景会用到。实测发现主窗口只设置了
+/// **小图标**（`WM_GETICON` 的 `ICON_SMALL` 有句柄），**大图标句柄为 0**：
+///
+/// ```text
+/// WM_GETICON ICON_BIG    = 0        ← 没设置
+/// WM_GETICON ICON_SMALL  = 10749621
+/// GetClassLongPtr HICON  = 0
+/// ```
+///
+/// 而 Alt+Tab、任务栏大图标、窗口标题栏都取大图标，取不到时才回退去读 exe 的
+/// 资源段 —— 这个回退在各处的行为并不一致，表现出来就是「有的地方图标换了、
+/// 有的地方还是旧的」。
+///
+/// `app.default_window_icon()` 是 Tauri 依据 `bundle.icon` 在**编译期**内嵌进
+/// 二进制的图标，因此单文件 exe 下同样可用，不依赖磁盘上的任何图标文件。
+fn apply_window_icon(app: &tauri::App) {
+    use tauri::Manager;
+
+    let Some(icon) = app.default_window_icon().cloned() else {
+        // 没有配置 bundle.icon 时不致命：exe 内嵌图标仍能覆盖多数场景
+        return;
+    };
+
+    match app.get_webview_window("main") {
+        Some(window) => {
+            if let Err(e) = window.set_icon(icon) {
+                // 设置失败也不该阻止启动，只是外观问题
+                eprintln!("设置窗口图标失败: {e}");
+            }
+        }
+        None => eprintln!("启动时未找到名为 main 的窗口，跳过图标设置"),
+    }
 }
 
 #[cfg(test)]

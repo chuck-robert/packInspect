@@ -1,4 +1,4 @@
-﻿/* =========================================================================
+/* =========================================================================
    PackInspect 主题 —— 深色优先，可切换浅色
    所有颜色集中在 :root[data-theme=...]，改主题只需替换这一层变量。
    约束：无外部字体、无图片资源（图标由后端生成 data URI）。
@@ -170,18 +170,6 @@ pre,
   height: 100%;
 }
 
-.titlebar__mark {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  background: linear-gradient(135deg, var(--accent), #7c5cff);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-  flex: none;
-}
 
 .titlebar__name {
   font-weight: 600;

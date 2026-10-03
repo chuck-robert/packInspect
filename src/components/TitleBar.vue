@@ -15,6 +15,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useAppStore } from '@/stores/app'
 import { useI18n } from '@/i18n'
 import type { SearchHit } from '@/types'
+import AppMark from '@/components/AppMark.vue'
 import ManagerLogo from '@/components/ManagerLogo.vue'
 
 const store = useAppStore()
@@ -125,7 +126,8 @@ async function closeWindow() {
 <template>
   <header class="titlebar" data-tauri-drag-region>
     <div class="titlebar__brand" data-tauri-drag-region>
-      <span class="titlebar__mark">PI</span>
+      <!-- 应用自身的品牌标记（包裹箱 + 放大镜），与安装图标同构 -->
+      <AppMark :size="20" />
       <span class="titlebar__name">{{ t('app.name') }}</span>
     </div>
 
