@@ -1,4 +1,4 @@
-node_modules/
+﻿node_modules/
 dist/
 *.local
 .DS_Store
@@ -20,3 +20,10 @@ src-tauri/gen/
 shot-*.png
 verify*.png
 launcher-*.txt
+
+# 调试时的临时截图（正式截图放 docs/screenshots/）
+step*-*.png
+installer-lang.png
+installer-welcome.png
+release-run*.png
+v*-*.png
