@@ -99,7 +99,10 @@ function planFor(item: RemotePackage): string {
 
         <div class="banner banner--info">{{ t('browse.noExecute') }}</div>
 
-        <div v-if="store.browseError" class="banner banner--warn">{{ store.browseError }}</div>
+        <!-- 能力限制提示（例如 PyPI 只支持精确名查询）与失败原因：分开显示 -->
+        <div v-if="store.browseHint" class="banner banner--warn">{{ store.browseHint }}</div>
+        <div v-if="store.browseError" class="banner banner--error">{{ store.browseError }}</div>
+        <div v-else-if="store.browseNote" class="banner banner--error">{{ store.browseNote }}</div>
 
         <!-- 安装方案：只给命令 -->
         <div v-if="plan" class="install-plan">
@@ -116,13 +119,27 @@ function planFor(item: RemotePackage): string {
           <div class="hint">{{ plan.explanation }}</div>
         </div>
 
-        <!-- 结果列表 -->
-        <div v-if="!store.browseLoading && results.length === 0 && !store.browseError" class="empty" style="padding: 34px">
+        <!-- 空结果：三种情况分别说明，不要一律说「没找到」 -->
+        <div
+          v-if="
+            !store.browseLoading &&
+            results.length === 0 &&
+            !store.browseError &&
+            !store.browseNote
+          "
+          class="empty"
+          style="padding: 34px"
+        >
           <div class="empty__icon">🔍</div>
-          <div>{{ store.browseQuery ? t('browse.empty') : t('browse.initial') }}</div>
+          <div v-if="!store.browseQuery">{{ t('browse.initial') }}</div>
+          <div v-else-if="store.browseUnsupported">{{ t('browse.unsupported') }}</div>
+          <div v-else>{{ t('browse.empty') }}</div>
+          <div v-if="store.browseQuery && !store.browseUnsupported" class="hint">
+            {{ t('browse.emptyHint') }}
+          </div>
         </div>
 
-        <ul v-else class="remote-list list-reset">
+        <ul v-if="results.length > 0" class="remote-list list-reset">
           <li v-for="item in results" :key="`${item.name}@${item.version ?? ''}`" class="remote-item">
             <div class="remote-item__main">
               <div class="remote-item__title">

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Tauri IPC 封装层。
  *
  * 这里是前端与系统的**唯一**通道：
@@ -21,6 +21,7 @@ import type {
   InstallPlan,
   ManagementAction,
   ManagerInfo,
+  BrowseResult,
   ManagerLogo,
   ManagerScanResult,
   OpenLinkRequest,
@@ -29,7 +30,6 @@ import type {
   PluginNode,
   PluginsRequest,
   RegistryConfig,
-  RemotePackage,
   ScanReport,
   ScanRequest,
 } from '@/types'
@@ -147,7 +147,7 @@ export const api = {
    * 在包仓库里搜索可安装的新包。
    * 只查询各生态的已知搜索 API；关键词经后端校验与编码。
    */
-  browsePackages: (request: BrowseRequest) => call<RemotePackage[]>('browse_packages', { request }),
+  browsePackages: (request: BrowseRequest) => call<BrowseResult>('browse_packages', { request }),
 
   /**
    * 生成安装方案 —— **只返回命令，不会执行**。

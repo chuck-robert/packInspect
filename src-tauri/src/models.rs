@@ -1,4 +1,4 @@
-﻿//! 后端 ↔ 前端共享数据结构。
+//! 后端 ↔ 前端共享数据结构。
 //!
 //! 约定：Rust 侧全部 `rename_all = "camelCase"`，与 `src/types/index.ts` 一一对应，
 //! 任何字段改动必须同步修改 TS 定义，否则前端类型检查会失败（这是刻意的，用来防漂移）。
@@ -429,6 +429,26 @@ pub struct RemotePackage {
     pub homepage: Option<String>,
     /// 等价安装命令（本工具不代为执行）
     pub install_command: Option<String>,
+}
+
+/// 在线浏览的结果。
+///
+/// 之所以不直接返回 `Vec<RemotePackage>`：空数组无法区分三种完全不同的情况 ——
+/// 「查了、确实没有这个包」「网络失败 / 被限流」「该生态不支持关键词搜索」。
+/// 让后端把差异显式带回来，界面才能给出有用的提示，
+/// 而不是一律显示「没有找到匹配的包」（这是之前最误导用户的地方）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowseResult {
+    pub packages: Vec<RemotePackage>,
+    /// 是否真的发起了查询（false = 该生态不支持关键词搜索）
+    pub attempted: bool,
+    /// 是否发生了网络 / 解析失败
+    pub failed: bool,
+    /// 失败或限制的具体说明
+    pub note: Option<String>,
+    /// 使用提示，例如「PyPI 不支持关键词搜索，已按精确名查询」
+    pub hint: Option<String>,
 }
 
 /// 安装动作的结果：只返回「该执行什么命令」，**不会真的执行**

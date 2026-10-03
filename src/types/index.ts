@@ -250,6 +250,24 @@ export interface InstallPlan {
   explanation: string
 }
 
+/**
+ * 在线浏览的结果。
+ *
+ * 不直接返回数组是因为空数组无法区分「真的没有」「网络失败」「不支持搜索」——
+ * 界面需要对这三种情况给出完全不同的提示。
+ */
+export interface BrowseResult {
+  packages: RemotePackage[]
+  /** 是否真的发起了查询（false = 该生态不支持关键词搜索） */
+  attempted: boolean
+  /** 是否发生网络 / 解析失败 */
+  failed: boolean
+  /** 失败或限制说明 */
+  note: string | null
+  /** 使用提示，例如「PyPI 不支持关键词搜索，已按精确名查询」 */
+  hint: string | null
+}
+
 /** 单个管理器的扫描结果（渐进式扫描的返回单元） */
 export interface ManagerScanResult {
   managerId: string

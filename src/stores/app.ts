@@ -76,6 +76,11 @@ interface State {
   browseQuery: string
   browseLoading: boolean
   browseError: string | null
+  /** 本次浏览的后端说明（能力限制 / 失败原因） */
+  browseNote: string | null
+  browseHint: string | null
+  /** 该生态是否根本不支持关键词搜索 */
+  browseUnsupported: boolean
   /** 最近一次生成的安装方案 */
   installPlan: InstallPlan | null
   keyword: string
@@ -112,6 +117,9 @@ export const useAppStore = defineStore('app', {
     browseQuery: '',
     browseLoading: false,
     browseError: null,
+    browseNote: null,
+    browseHint: null,
+    browseUnsupported: false,
     installPlan: null,
     keyword: '',
     onlyRedundant: false,
@@ -304,15 +312,28 @@ export const useAppStore = defineStore('app', {
       if (!query.trim()) {
         this.remotePackages = []
         this.browseError = null
+        this.browseNote = null
+        this.browseHint = null
+        this.browseUnsupported = false
         return
       }
       this.browseLoading = true
       this.browseError = null
+      this.browseNote = null
+      this.browseHint = null
+      this.browseUnsupported = false
       this.browseQuery = query
       this.installPlan = null
       try {
-        this.remotePackages = await api.browsePackages({ manager: managerId, query, limit: 25 })
-        this.pushLog(`在 ${managerId} 仓库中搜索「${query}」：${this.remotePackages.length} 条结果`)
+        const result = await api.browsePackages({ manager: managerId, query, limit: 25 })
+        this.remotePackages = result.packages
+        this.browseNote = result.note
+        this.browseHint = result.hint
+        this.browseUnsupported = !result.attempted
+        this.pushLog(
+          `在 ${managerId} 仓库中搜索「${query}」：${result.packages.length} 条结果` +
+            (result.note ? `（${result.note}）` : ''),
+        )
       } catch (e) {
         const err = e instanceof IpcError ? e : IpcError.from(e)
         this.remotePackages = []

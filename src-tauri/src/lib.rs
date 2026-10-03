@@ -1,4 +1,4 @@
-﻿//! PackInspect 库入口。
+//! PackInspect 库入口。
 //!
 //! 分层（依赖方向自上而下，下层不反向依赖上层）：
 //! ```text
@@ -110,5 +110,75 @@ mod integration_tests {
             // 只要没超时且没被拒绝即可；即使返回非零也应由上层兜底到磁盘扫描
             assert!(!out.timed_out || out.success, "{id} 的列表命令超时");
         }
+    }
+
+    /// **真实网络**端到端验证：对每个已接入在线浏览的生态各搜一次。
+    ///
+    /// 默认忽略（离线环境必然失败）。需要联网核对时显式运行：
+    /// ```text
+    /// cargo test --lib browse_ecosystems_online -- --ignored --nocapture
+    /// ```
+    /// 这个用例的价值：上游会改字段名 —— 只靠 mock 的单元测试发现不了
+    /// 「端点还在但响应结构变了」这类问题，而这正是用户看到「搜不到」的常见原因。
+    #[test]
+    #[ignore = "需要网络；用 --ignored 显式运行"]
+    fn browse_ecosystems_online() {
+        let cases = [
+            ("npm", "vue"),
+            ("cargo", "ripgrep"),
+            ("dotnet", "newtonsoft"),
+            ("composer", "phpunit"),
+            ("gem", "rails"),
+            ("dart", "http"),
+            ("powershellget", "pester"),
+            ("pip", "requests"), // PyPI 按精确名查询
+            ("winget", "git"),
+        ];
+
+        let mut report = Vec::new();
+        let mut failures = Vec::new();
+
+        for (manager, query) in cases {
+            let request = crate::models::BrowseRequest {
+                manager: manager.to_string(),
+                query: query.to_string(),
+                limit: 5,
+                timeout_ms: Some(20_000),
+            };
+            match crate::browse::browse(&request) {
+                Ok(result) => {
+                    let sample = result
+                        .packages
+                        .first()
+                        .map(|p| format!("{} {}", p.name, p.version.clone().unwrap_or_default()))
+                        .unwrap_or_else(|| "(空)".to_string());
+                    report.push(format!(
+                        "{manager:<15} attempted={:<6} failed={:<6} 命中={:<3} 首条={sample}",
+                        result.attempted, result.failed, result.packages.len()
+                    ));
+                    if result.packages.is_empty() || result.failed {
+                        failures.push(format!(
+                            "{manager}: {}",
+                            result.note.clone().unwrap_or_else(|| "无结果且无说明".into())
+                        ));
+                    }
+                }
+                Err(e) => {
+                    report.push(format!("{manager:<15} 调用失败: {}", e.message));
+                    failures.push(format!("{manager}: {}", e.message));
+                }
+            }
+        }
+
+        println!("\n=== 在线浏览实跑结果 ===");
+        for line in &report {
+            println!("{line}");
+        }
+
+        assert!(
+            failures.is_empty(),
+            "以下生态的在线浏览未通过：\n{}",
+            failures.join("\n")
+        );
     }
 }

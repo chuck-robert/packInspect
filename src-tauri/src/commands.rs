@@ -331,7 +331,7 @@ pub fn manager_logos(
 
 /// 在包仓库里搜索可安装的新包
 #[tauri::command]
-pub async fn browse_packages(request: BrowseRequest) -> AppResult<Vec<RemotePackage>> {
+pub async fn browse_packages(request: BrowseRequest) -> AppResult<BrowseResult> {
     packages::ensure_known(&request.manager)?;
     let timeout = clamp_timeout(request.timeout_ms, 20_000);
     blocking(move || {
