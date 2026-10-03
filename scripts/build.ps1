@@ -1,17 +1,22 @@
 <#
 .SYNOPSIS
-    PackInspect 构建/测试辅助脚本（替代 .cmd 版本，避免 cmd.exe 的引号解析问题）。
+    PackInspect 构建 / 测试 / 启动辅助脚本。
+
+.DESCRIPTION
+    自行完成环境预检与工具链注入（见 env-preflight.ps1），因此不依赖当前 shell 的 PATH。
+    所有 cargo 输出都会原样透传到控制台并同时写入日志，方便看出「还在编译」而不是卡死。
 
 .EXAMPLE
     ./scripts/build.ps1 check          # cargo check --all-targets（最快，不链接）
     ./scripts/build.ps1 test           # cargo test --lib
     ./scripts/build.ps1 clippy         # cargo clippy --all-targets
+    ./scripts/build.ps1 build          # 只编译可执行文件（不启动）
     ./scripts/build.ps1 run            # 编译并启动桌面应用
-    ./scripts/build.ps1 test plugins   # 透传过滤参数给 cargo
+    ./scripts/build.ps1 test -- plugins --nocapture   # `--` 之后的参数原样透传给 cargo
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('check', 'test', 'clippy', 'run', 'build')]
+    [ValidateSet('check', 'test', 'clippy', 'run', 'build', 'doctor')]
     [string]$Task = 'check',
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -20,98 +25,155 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'env-preflight.ps1')
 
-# ---- 工具链环境 ------------------------------------------------------------
-$env:CARGO_HOME = Join-Path $env:USERPROFILE '.cargo'
-$env:RUSTUP_HOME = Join-Path $env:USERPROFILE '.rustup'
-$env:PATH = "$(Join-Path $env:CARGO_HOME 'bin');$env:PATH"
+Write-Host ''
+Write-Host '  PackInspect' -ForegroundColor Cyan -NoNewline
+Write-Host ' 本地包环境扫描' -ForegroundColor DarkGray
+# 必须整体加括号：`Write-Host a + b` 会被解析成「两个位置参数组成的数组」，
+# 输出时 PowerShell 用 '+' 连接，结果就多出一个加号。
+Write-Host ('  ' + ('-' * 64)) -ForegroundColor DarkGray
 
-# 网络受限时启用本地代理（Clash 默认 7890）
-$proxy = 'http://127.0.0.1:7890'
-if (-not $env:HTTP_PROXY) { $env:HTTP_PROXY = $proxy }
-if (-not $env:HTTPS_PROXY) { $env:HTTPS_PROXY = $proxy }
+# ---------------------------------------------------------------------------
+# 环境预检
+# ---------------------------------------------------------------------------
+$toolchain = Get-PackInspectToolchain
 
-# ---- MSVC 链接器环境（cargo 需要 link.exe）---------------------------------
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-$vsPath = $null
-if (Test-Path $vswhere) {
-    $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-}
-if (-not $vsPath) {
-    # vswhere 不可用时的常见路径兜底
-    $candidates = @(
-        'D:\Microsoft Visual Studio\18\Community',
-        'C:\Program Files\Microsoft Visual Studio\2022\Community',
-        'C:\Program Files\Microsoft Visual Studio\2022\BuildTools'
-    )
-    $vsPath = $candidates | Where-Object { Test-Path (Join-Path $_ 'VC\Auxiliary\Build\vcvars64.bat') } | Select-Object -First 1
-}
-
-if ($vsPath) {
-    $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
-    if (Test-Path $vcvars) {
-        Write-Host "[build] 加载 MSVC 环境: $vsPath" -ForegroundColor DarkGray
-        # 先备份用户 PATH：vcvars64.bat 会把 PATH 重置为它自己的一套，
-        # 那会丢掉 nodejs / python 等目录，导致应用运行时探测不到 npm、pip。
-        $userPath = $env:PATH
-        $output = & cmd.exe /c "`"$vcvars`" >nul 2>&1 && set"
-        foreach ($line in $output) {
-            if ($line -match '^([^=]+)=(.*)$') {
-                $name = $Matches[1]
-                if ($name -match '^(INCLUDE|LIB|LIBPATH|VCINSTALLDIR|VCToolsInstallDir|WindowsSdkDir|WindowsSDKVersion|UCRTVersion|VSINSTALLDIR|VSCMD_.*)$') {
-                    Set-Item -Path "env:$name" -Value $Matches[2] -ErrorAction SilentlyContinue
-                }
-            }
-        }
-        # PATH 采用「原始用户 PATH + vcvars 追加的目录」，避免丢失开发工具
-        $vcvarsPath = ($output | Where-Object { $_ -match '^PATH=' } | Select-Object -First 1)
-        if ($vcvarsPath) {
-            $merged = $userPath
-            foreach ($dir in ($vcvarsPath -replace '^PATH=', '').Split(';')) {
-                if ($dir -and $merged -notlike "*$dir*") { $merged = "$merged;$dir" }
-            }
-            $env:PATH = $merged
-        }
+if ($Task -eq 'doctor') {
+    Write-Host ''
+    Write-Host '  环境检查结果' -ForegroundColor Cyan
+    Write-Host "    Node.js     : $(if (Get-Command node -EA SilentlyContinue) { (node --version) } else { '缺失' })"
+    Write-Host "    cargo       : $(if ($toolchain.Cargo) { $toolchain.Cargo } else { '缺失' })"
+    Write-Host "    Visual Studio: $(if ($toolchain.VsPath) { $toolchain.VsPath } else { '缺失（无 C++ 工具链）' })"
+    if ($toolchain.Problems.Count) {
+        Write-Host ''
+        Write-Host '  阻塞项：' -ForegroundColor Red
+        $toolchain.Problems | ForEach-Object { Write-Host "    - $_" -ForegroundColor Red }
     }
-} else {
-    Write-Warning "[build] 未找到 Visual Studio C++ 工具链；若编译报 'link.exe not found'，请安装 MSVC Build Tools。"
-}
-
-$cargoExe = Join-Path $env:CARGO_HOME 'bin\cargo.exe'
-if (-not (Test-Path $cargoExe)) {
-    # 退回到 PATH 查找
-    $found = Get-Command cargo -ErrorAction SilentlyContinue
-    if (-not $found) {
-        throw "找不到 cargo。请先安装 Rust 工具链：https://rustup.rs/"
+    if ($toolchain.Hints.Count) {
+        Write-Host ''
+        Write-Host '  建议：' -ForegroundColor Yellow
+        $toolchain.Hints | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
     }
-    $cargoExe = $found.Source
+    Write-Host ''
+    exit $(if ($toolchain.Ok) { 0 } else { 1 })
 }
-# vcvars64.bat 会重置 PATH，因此用绝对路径调用 cargo，保证顺序无关
-$env:PATH = "$(Join-Path $env:CARGO_HOME 'bin');$env:PATH"
 
-Push-Location (Join-Path $repoRoot 'src-tauri')
+if (-not $toolchain.Ok) {
+    Write-Host ''
+    Write-Host '  ✗ 环境不满足，无法继续' -ForegroundColor Red
+    $toolchain.Problems | ForEach-Object { Write-Host "    - $_" -ForegroundColor Red }
+    if ($toolchain.Hints.Count) {
+        Write-Host ''
+        Write-Host '  请先完成：' -ForegroundColor Yellow
+        $toolchain.Hints | ForEach-Object { Write-Host "    - $_" -ForegroundColor Yellow }
+    }
+    Write-Host ''
+    Write-Host '  也可以随时单独体检：./scripts/build.ps1 doctor' -ForegroundColor DarkGray
+    Write-Host ''
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# 组装 cargo 命令
+# ---------------------------------------------------------------------------
+$cargoCmd = switch ($Task) {
+    'test' { @('test', '--lib') }
+    'clippy' { @('clippy', '--all-targets') }
+    'run' { @('run', '--no-default-features', '--color', 'always') }
+    'build' { @('build', '--no-default-features', '--color', 'always') }
+    default { @('check', '--all-targets', '--color', 'always') }
+}
+$full = $cargoCmd + $CargoArgs
+
+$logDir = Join-Path $repoRoot '.logs'
+if (-not (Test-Path $logDir)) { [void](New-Item -ItemType Directory -Path $logDir) }
+$logPath = Join-Path $logDir 'build.log'
+$exePath = Join-Path $repoRoot 'src-tauri\target\debug\packinspect.exe'
+
+# 首次编译 400+ 个 crate 需要数分钟；明确告知，避免被误认为卡死
+if ($Task -in @('run', 'build') -and -not (Test-Path $exePath)) {
+    Write-Host ''
+    Write-Host '  首次编译需要下载并编译 400 多个依赖 crate，通常 3~8 分钟。' -ForegroundColor Yellow
+    Write-Host '  期间会持续输出 Compiling / Building 进度，请不要关闭窗口。' -ForegroundColor Yellow
+}
+
+Write-Host ''
+Write-Host "  ▶ cargo $($full -join ' ')" -ForegroundColor Cyan
+Write-Host "    完整日志：$logPath" -ForegroundColor DarkGray
+Write-Host ''
+
+# 为什么不用 `& cargo ... 2>&1 | Tee-Object`：
+# cargo 把进度（Compiling / Building / Finished）写到 **stderr**，而 PowerShell 会把
+# 原生命令的 stderr 包装成 ErrorRecord 显示成红色 `NativeCommandError` —— 看起来像失败，
+# 实际退出码是 0。这里改用 ProcessStartInfo 把 stdout/stderr 原样重定向到日志文件，
+# 控制台只输出干净的摘要，从根上避免这种误报。
+$psi = [System.Diagnostics.ProcessStartInfo]::new()
+$psi.FileName = $toolchain.Cargo
+# 注意：不能用 ArgumentList —— 它在 .NET Framework（Windows PowerShell 5.1）上不存在，
+# 而启动器正是用 powershell.exe 调起本脚本的。这里手工拼 Parameters，
+# 并对含空格的参数补引号（cargo 参数通常不含空格，但路径可能含）。
+$quoted = $full | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+$psi.Arguments = ($quoted -join ' ')
+$psi.WorkingDirectory = Join-Path $repoRoot 'src-tauri'
+$psi.UseShellExecute = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError = $true
+$psi.CreateNoWindow = $true
+# cargo 会用 ANSI 颜色；日志文件里不要残留转义序列
+$psi.EnvironmentVariables['CARGO_TERM_COLOR'] = 'never'
+
+$process = [System.Diagnostics.Process]::new()
+$process.StartInfo = $psi
+
+# 日志文件可能被上一次仍在运行的构建占用，此时退回到带时间戳的名字
+$stream = $null
 try {
-    $cargoCmd = switch ($Task) {
-        'test' { @('test', '--lib') }
-        'clippy' { @('clippy', '--all-targets') }
-        'run' { @('run', '--no-default-features', '--color', 'never') }
-        'build' { @('build', '--no-default-features') }
-        default { @('check', '--all-targets') }
-    }
-    $full = $cargoCmd + $CargoArgs
-    Write-Host "[build] cargo $($full -join ' ')" -ForegroundColor Cyan
-    # 关键：cargo 会把进度写到 stderr，而 PowerShell 在 $ErrorActionPreference='Stop'
-    # 下会把原生命令的 stderr 当成终止错误。这里临时放宽，只认退出码。
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        & $cargoExe @full
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prevEap
-    }
-    Write-Host "[build] exit code: $code" -ForegroundColor $(if ($code -eq 0) { 'Green' } else { 'Red' })
-    exit $code
-} finally {
-    Pop-Location
+    $stream = [System.IO.File]::Create($logPath)
+} catch {
+    $logPath = Join-Path $logDir ("build-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Write-Host "  ! 默认日志被占用，改用 $logPath" -ForegroundColor Yellow
+    $stream = [System.IO.File]::Create($logPath)
 }
+$writer = [System.IO.StreamWriter]::new($stream)
+$writer.AutoFlush = $true
+
+try {
+    [void]$process.Start()
+    # 两个流同时读，避免任一管道写满导致 cargo 阻塞
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $text = $stdout.Result + $stderr.Result
+    $writer.Write($text)
+    $code = $process.ExitCode
+} finally {
+    $writer.Dispose()
+    $stream.Dispose()
+    $process.Dispose()
+}
+
+# 控制台只回显有信息量的行，避免刷屏（完整内容始终在日志文件里）
+$lines = $text -split "`r?`n"
+$errors = $lines | Where-Object { $_ -match '^\s*error(\[|:)' }
+$compileCount = ($lines | Where-Object { $_ -match '^\s*(Compiling|Checking|Building)' }).Count
+$finished = $lines | Where-Object { $_ -match '^\s*Finished' } | Select-Object -Last 1
+
+if ($compileCount -gt 0) {
+    Write-Host "  -- 编译了 $compileCount 步 --" -ForegroundColor DarkGray
+}
+if ($finished) { Write-Host "    $($finished.Trim())" -ForegroundColor DarkGray }
+if ($errors.Count -gt 0) {
+    Write-Host '  -- 错误 --' -ForegroundColor Red
+    $errors | Select-Object -First 15 | ForEach-Object { Write-Host "    $($_.Trim())" -ForegroundColor Red }
+}
+
+Write-Host ''
+if ($code -eq 0) {
+    Write-Host '  ✓ 完成' -ForegroundColor Green
+} else {
+    Write-Host "  ✗ 失败（退出码 $code）" -ForegroundColor Red
+    Write-Host "    排障建议：先看 $logPath 里的 error 行；环境问题可用 ./scripts/build.ps1 doctor 体检" -ForegroundColor DarkGray
+}
+Write-Host ''
+exit $code

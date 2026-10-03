@@ -1,0 +1,14 @@
+# Git 行尾策略。
+#
+# 为什么必须显式指定：`cmd.exe` 按字节解析 .cmd/.bat，**行尾必须是 CRLF**。
+# 若脚本以 LF 行尾检出，命令会被逐字节拆散，报出一堆
+# "'M' is not recognized" / "'ho' is not recognized" 之类的碎片错误 —— 表现为「启动不了」。
+# 这是本项目实际踩过的坑，所以这里强制批处理与 PowerShell 脚本使用 CRLF。
+* text=auto eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.ico binary

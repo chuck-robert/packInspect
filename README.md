@@ -8,22 +8,72 @@
 
 ## 1. 一键启动
 
-双击仓库根目录的 **`启动 PackInspect.cmd`** 即可。它会自动：
+双击仓库根目录的 **`启动 PackInspect.cmd`** 即可。它会：
 
 1. 缺 `node_modules` 时先跑 `npm install`
-2. 最小化窗口启动 Vite devServer（端口 1420）
-3. 轮询端口直到可连接
+2. 检查 1420 端口；没起就最小化窗口启动 Vite devServer
+3. 轮询端口直到可连接（每 5 秒打一个点，不会看起来像卡死）
 4. 调用 `scripts\build.ps1 run` 编译并打开桌面应用
 
-关闭应用窗口即退出（devServer 需手动结束，或直接关机重启即可）。
+关闭应用窗口后，devServer 仍在最小化窗口里运行；要停它就关掉那个窗口。
+
+启动逻辑在 **`scripts/launch.ps1`** 里，`.cmd` 只是一个极简外壳：
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launch.ps1"
+```
+
+> ⚠️ **批处理文件的硬约束（踩过两次的坑）**
+>
+> `cmd.exe` 是**按字节**读取 `.cmd` / `.bat` 的，因此这类文件必须同时满足：
+> 1. **行尾是 CRLF**。若被编辑器改成 LF-only，脚本会被拆成
+>    `'M' is not recognized` / `'ho' is not recognized` 之类的碎片错误 ——
+>    现象就是「双击没反应 / 启动不了」。
+> 2. **纯 ASCII**。按控制台 OEM 代码页解析，中文注释会破坏行结构。
+>
+> 因此仓库里加了 `.gitattributes` 强制 `*.cmd`/`*.bat`/`*.ps1` 使用 CRLF，
+> 并且**所有启动逻辑都放在 `scripts/*.ps1`**，只让 `.cmd` 承担一行转发。
+> 如果你改动了 `.cmd`，请确认行尾仍是 CRLF（`Get-Content` 看不出，用
+> `Format-Hex` 或统计 `LF-only` 字节数）。
+
+### 启动不了？先跑体检
+
+```powershell
+./scripts/build.ps1 doctor
+```
+
+它会逐项检查 Node.js / cargo / Visual Studio C++ 工具链 / WebView2 运行时，
+缺什么直接给出安装地址。
+
+### 常见问题
+
+| 现象 | 原因与处理 |
+|---|---|
+| 窗口控制台停在 `[3/3] 编译并启动` 很久 | **正常**。首次要编译 400+ 个 crate，3~8 分钟。日志实时写在 `.logs\build.log` |
+| 提示 `devServer 60 秒内未就绪` | 端口 1420 被占用。看 `.logs\vite-dev.log`，或先关掉占用的程序 |
+| 双击 `.cmd` 弹出一堆 `'M' is not recognized` | `.cmd` 行尾被改成了 LF。用 `git checkout -- "启动 PackInspect.cmd"` 恢复（`.gitattributes` 会给出 CRLF） |
+| 提示 `未找到 Node.js / cargo` | 跑 `doctor` 按提示安装，装完**重开终端**（PATH 需要刷新） |
+| 编译报 `link.exe not found` | 缺 MSVC 生成工具。装「使用 C++ 的桌面开发」工作负载 |
+| 窗口一片空白 | 多半是 WebView2 缺失，装 https://developer.microsoft.com/microsoft-edge/webview2/ |
+| 界面中英混杂 / 主题不对 | 清掉 WebView 存储 `%LOCALAPPDATA%\dev.packinspect.app` 与 `%APPDATA%\PackInspect` 后重启 |
+
+> ⚠️ **已知坑：Vite 的 IPv4/IPv6 绑定。** Vite 默认监听 `localhost`，在部分 Windows 上
+> 只解析到 IPv6 `::1`。此时外部探测 `127.0.0.1:1420` 会被拒绝，启动脚本会一直空等到超时
+> —— 看起来就像「启动器卡死」。本项目已在 `vite.config.ts` 里显式 `host: '127.0.0.1'`，
+> 并把 `tauri.conf.json` 的 `devUrl` 改为 `http://127.0.0.1:1420`，同时让 `launch.ps1`
+> 的探活按 `::1` → `127.0.0.1` → HTTP 依次回退，三重兜住这个问题。
+>
+> ⚠️ **另一个坑：日志文件位置。** cargo 的输出日志若放在项目根目录，Vite 的文件监听器
+> 会在构建期间尝试 watch 这个被独占的文件，直接抛 `EBUSY` 崩溃。所以日志统一放在
+> `.logs/`，并在 `vite.config.ts` 的 `watch.ignored` 里排除。
 
 ### 手动启动（开发时更常用）
 
 ```cmd
-:: 1. 起前端 devServer（固定 1420，日志 vite-dev.log）
+:: 1. 起前端 devServer（固定 1420，日志 .logs\vite-dev.log）
 tauri-vite.cmd
 
-:: 2. 编译并启动应用（日志 app-run.log）
+:: 2. 编译并启动应用（日志 .logs\build.log）
 scripts\build.ps1 run
 ```
 
@@ -31,22 +81,25 @@ scripts\build.ps1 run
 > `build.beforeDevCommand`（`npm run dev`），该命令依赖 `npm` 垫片，在非交互 shell
 > 或 PATH 不含 npm 时会直接失败并中断构建。直接 `cargo run` 等效且少一层依赖 ——
 > Tauri 二进制会自己读取 `build.devUrl` 连接已运行的 Vite。
->
-> ⚠️ 所有 `.cmd` 文件**必须保持纯 ASCII**。`cmd.exe` 按控制台 OEM 代码页解析脚本，
-> 非 ASCII 字符会破坏行结构（中文注释会导致脚本整体解析失败）—— 这是实际踩过的坑。
 
 ### 构建脚本
 
-`scripts/build.ps1` 会自行补齐 cargo 路径与 MSVC 环境（含把 vcvars 的 PATH **合并**
-而不是替换，否则会丢掉 nodejs/python 目录）：
+`scripts/build.ps1` 会自行完成环境预检与工具链注入（见 `scripts/env-preflight.ps1`，
+其中 vcvars 的 PATH 采用**合并**而非替换，否则会丢掉 nodejs/python 目录）：
 
 ```powershell
+./scripts/build.ps1 doctor     # 环境体检（缺什么、怎么装）
 ./scripts/build.ps1 check      # cargo check --all-targets（最快，不链接）
 ./scripts/build.ps1 test       # cargo test --lib
 ./scripts/build.ps1 clippy     # cargo clippy --all-targets
+./scripts/build.ps1 build      # 只编译，不启动
 ./scripts/build.ps1 run        # 编译并启动桌面应用
-./scripts/build.ps1 test -- <用例名> --nocapture   # 透传给 cargo
+./scripts/build.ps1 test -- <用例名> --nocapture   # `--` 之后原样透传给 cargo
 ```
+
+cargo 的完整输出写入 `.logs/build.log`，控制台只显示编译步数、`Finished` 行与 error 行。
+（不用 `2>&1 | Tee-Object` 的原因：cargo 把进度写到 stderr，PowerShell 会把它包装成
+红色 `NativeCommandError`，看起来像失败，实际退出码为 0。）
 
 ### 功能自检
 

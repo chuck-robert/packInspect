@@ -12,11 +12,16 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
+    // 显式绑定 IPv4：默认的 `localhost` 在部分 Windows 上只解析到 ::1，
+    // 会导致外部探测（启动脚本 / Tauri）连 127.0.0.1 时被拒绝。
+    host: '127.0.0.1',
     port: 1420,
     strictPort: true,
     watch: {
-      // src-tauri 由 cargo 自己监视，Vite 不要跟着重启
-      ignored: ['**/src-tauri/**'],
+      // src-tauri 由 cargo 自己监视，Vite 不要跟着重启。
+      // .logs 必须忽略：cargo 会把完整输出实时写入 .logs/build.log，
+      // 该文件在构建期间被占用，Vite 去 watch 会直接抛 EBUSY 崩溃。
+      ignored: ['**/src-tauri/**', '**/.logs/**'],
     },
   },
   build: {

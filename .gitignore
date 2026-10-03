@@ -1,7 +1,6 @@
 node_modules/
 dist/
 *.local
-*.log
 .DS_Store
 .idea/
 .vscode/*
@@ -11,5 +10,13 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 
+# 运行日志（cargo 完整输出、Vite devServer 输出）。
+# 放在 .logs/ 而不是项目根目录：cargo 构建期间会独占日志文件，
+# 而 Vite 的文件监听器一旦 watch 到被占用的文件会直接 EBUSY 崩溃。
+.logs/
+*.log
+
 # 本地截图 / 临时验证产物
 shot-*.png
+verify*.png
+launcher-*.txt
