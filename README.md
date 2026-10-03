@@ -82,6 +82,18 @@ scripts\build.ps1 run
 > 或 PATH 不含 npm 时会直接失败并中断构建。直接 `cargo run` 等效且少一层依赖 ——
 > Tauri 二进制会自己读取 `build.devUrl` 连接已运行的 Vite。
 
+### 前端逻辑回归校验
+
+有两处前端逻辑用真实数据才能发现、又不需要浏览器即可验证，因此做成 Node 脚本并由
+`./scripts/build.ps1 verify` 统一执行：
+
+| 脚本 | 校验内容 |
+|---|---|
+| `verify-scan-merge.mjs` | **单管理器扫描不得清空其它管理器的数据**（曾导致「打开一个包管理器后，别的包里搜不到东西」） |
+| `verify-search-parity.mjs` | **包列表分页与顶部搜索必须用同一套匹配规则**（曾导致「顶部搜得到、分页搜不到」） |
+
+它们都直接读源码断言修复存在，再用模拟/真实数据跑对照，因此改回旧写法会立刻失败。
+
 ### 构建脚本
 
 `scripts/build.ps1` 会自行完成环境预检与工具链注入（见 `scripts/env-preflight.ps1`，

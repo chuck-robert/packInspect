@@ -289,5 +289,6 @@
     "browse.emptyHint":  "Try another keyword; for ecosystems without keyword search, enter the full package name.",
     "status.finishing":  "Finishing…",
     "packages.loading":  "Reading packages for this manager…",
-    "packages.loadingHint":  "Results appear as soon as each manager finishes; you do not need to wait for all of them."
+    "packages.loadingHint":  "Results appear as soon as each manager finishes; you do not need to wait for all of them.",
+    "packages.matchContext":  "keyword \"{keyword}\" · manager {manager} · {total} packages in this manager"
 }

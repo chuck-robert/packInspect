@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     PackInspect 构建 / 测试 / 启动辅助脚本。
 
@@ -16,7 +16,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('check', 'test', 'clippy', 'run', 'build', 'doctor')]
+    [ValidateSet('check', 'test', 'clippy', 'run', 'build', 'doctor', 'verify')]
     [string]$Task = 'check',
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -72,6 +72,40 @@ if (-not $toolchain.Ok) {
     Write-Host '  也可以随时单独体检：./scripts/build.ps1 doctor' -ForegroundColor DarkGray
     Write-Host ''
     exit 1
+}
+
+# ---------------------------------------------------------------------------
+# verify：前端纯逻辑的回归校验
+# ---------------------------------------------------------------------------
+# 这几个检查覆盖的是「只有跑真实数据才会暴露」的前端逻辑问题，而它们又不需要
+# 浏览器或 Tauri 运行时（逻辑是纯函数），因此用 Node 直接跑最省事：
+#   verify-scan-merge  单管理器扫描不得清空其它管理器的数据
+#   verify-search-parity 包列表分页与顶部搜索必须用同一套匹配规则
+# 不放进 cargo test 是因为它们是 TypeScript 侧的逻辑；不放进 vitest 是因为
+# 为了两个断言引入整套测试框架不划算（项目目前无前端测试依赖）。
+if ($Task -eq 'verify') {
+    $scripts = @('verify-scan-merge.mjs', 'verify-search-parity.mjs')
+    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+    if (-not $node) {
+        Write-Host '  找不到 node，无法执行前端逻辑校验。' -ForegroundColor Red
+        exit 1
+    }
+    $failed = 0
+    foreach ($s in $scripts) {
+        $path = Join-Path $repoRoot "scripts\$s"
+        Write-Host ''
+        Write-Host "  ▶ node scripts\$s" -ForegroundColor Cyan
+        # 用 cmd 调用并把输出直接透传，保留脚本自身的退出码
+        & cmd.exe /c "`"$node`" `"$path`""
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+    Write-Host ''
+    if ($failed -gt 0) {
+        Write-Host "  ✗ 失败（$failed 个校验未通过）" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host '  ✓ 完成' -ForegroundColor Green
+    exit 0
 }
 
 # ---------------------------------------------------------------------------

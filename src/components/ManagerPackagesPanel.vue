@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 /**
  * 某个包管理器的已安装包列表（管理器详情页的「包列表」分页）。
  *
@@ -11,7 +11,7 @@ import { useI18n } from '@/i18n'
 import type { ManagementAction, ManagerInfo, PackageRecord } from '@/types'
 import PackageContextMenu from '@/components/PackageContextMenu.vue'
 import PackageDetailDrawer from '@/components/PackageDetailDrawer.vue'
-import { formatBytesShort, formatCount } from '@/utils/format'
+import { formatBytesShort, formatCount, matchesKeyword } from '@/utils/format'
 
 const props = defineProps<{ manager: ManagerInfo }>()
 
@@ -28,15 +28,22 @@ const sortAsc = ref(true)
 const detailTarget = ref<PackageRecord | null>(null)
 const menuState = ref<{ record: PackageRecord; x: number; y: number } | null>(null)
 
-/** 该管理器的包（再用全局关键字过滤，兼容「从搜索跳过来」的场景） */
+/**
+ * 该管理器的包（再用全局关键字过滤）。
+ *
+ * 【必须与顶部搜索用同一套匹配规则】
+ * 这里此前用的是普通 `includes`，只查 name 与 version；
+ * 顶部搜索用的是 `matchesKeyword`（归一化 + 查 name / version / description / path）。
+ * 两套规则不一致会造成「顶部搜得到、这里搜不到」的诡异现象 ——
+ * 例如 winget 的 Oh My Posh：name 是机器 ID `JanDeDobbeleer.OhMyPosh`，
+ * 显示名「Oh My Posh」只在 description 里，用户输入 `oh my posh`（带空格）时，
+ * 普通 includes 匹配不上，而归一化匹配可以。现在统一走 matchesKeyword。
+ */
 const rows = computed(() => {
-  const keyword = store.keyword.trim().toLowerCase()
+  const keyword = store.keyword.trim()
   const list = (store.report?.packages ?? []).filter((p) => {
     if (p.manager !== props.manager.id) return false
-    if (!keyword) return true
-    return (
-      p.name.toLowerCase().includes(keyword) || (p.version ?? '').toLowerCase().includes(keyword)
-    )
+    return matchesKeyword([p.name, p.version, p.description, p.path], keyword)
   })
   const dir = sortAsc.value ? 1 : -1
   list.sort((a, b) =>
@@ -46,6 +53,11 @@ const rows = computed(() => {
   )
   return list
 })
+
+/** 该管理器一共有多少包（不受关键字影响，用于空态提示） */
+const totalInManager = computed(() =>
+  (store.report?.packages ?? []).filter((p) => p.manager === props.manager.id).length,
+)
 
 const hasSize = computed(() => rows.value.some((r) => r.size !== null))
 
@@ -102,6 +114,19 @@ function openMenu(record: PackageRecord, event: MouseEvent) {
         <div>{{ store.keyword ? t('packages.noMatch') : t('packages.emptyTitle') }}</div>
         <div class="hint">
           {{ store.keyword ? t('packages.noMatchHint') : t('packages.emptyHint') }}
+        </div>
+        <!--
+          显示匹配上下文：万一「顶部搜得到、这里搜不到」，这行能直接说明原因 ——
+          是关键字没传过来，还是该管理器本来就没扫到包。
+        -->
+        <div v-if="store.keyword" class="hint mono" style="margin-top: 8px; opacity: 0.75">
+          {{
+            t('packages.matchContext', {
+              keyword: store.keyword,
+              manager: manager.id,
+              total: formatCount(totalInManager),
+            })
+          }}
         </div>
       </template>
     </div>
